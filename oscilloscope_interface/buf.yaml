@@ -1,0 +1,10 @@
+# FILE: oscilloscope_interface/buf.yaml
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - DEFAULT
+breaking:
+  use:
+    - FILE

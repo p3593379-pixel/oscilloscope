@@ -1,0 +1,40 @@
+/* FILE: control_panel_web/src/components/Sidebar.module.css */
+.sidebar {
+    width: 220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1.25rem 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.brandIcon { font-size: 1.25rem; color: var(--primary); }
+.brandName { font-weight: 600; font-size: 15px; }
+
+.nav { list-style: none; padding: 0.5rem 0; }
+
+.navItem {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 1rem;
+    border-radius: 0;
+    font-size: 13.5px;
+    color: var(--text-muted);
+    transition: background 120ms, color 120ms;
+    text-align: left;
+}
+
+.navItem:hover { background: var(--surface-2); color: var(--text); }
+.navItem.active { background: rgba(79,152,163,0.12); color: var(--primary); }
+
+.icon { font-size: 14px; width: 18px; text-align: center; }

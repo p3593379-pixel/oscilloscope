@@ -1,0 +1,44 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #0d1117;
+  color: #e6edf3;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.osc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 9px 18px;
+  transition: background 160ms ease, transform 100ms ease, opacity 160ms ease;
+}
+.osc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.osc-btn--primary { background: #4fffb0; color: #0d1117; }
+.osc-btn--primary:hover:not(:disabled)  { background: #6effbf; }
+.osc-btn--primary:active:not(:disabled) { transform: scale(0.97); }
+.osc-btn--ghost {
+  background: rgba(255,255,255,0.06);
+  color: #e6edf3;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.osc-btn--ghost:hover:not(:disabled) { background: rgba(255,255,255,0.1); }

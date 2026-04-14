@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": "src",
+    "paths": {
+      "@/app/*":       ["app/*"],
+      "@/pages/*":     ["pages/*"],
+      "@/widgets/*":   ["widgets/*"],
+      "@/features/*":  ["features/*"],
+      "@/entities/*":  ["entities/*"],
+      "@/shared/*":    ["shared/*"],
+      "@/generated/*": ["generated/*"]
+    }
+  },
+  "include": ["src"]
+}

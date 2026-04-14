@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - local: ./node_modules/.bin/protoc-gen-es
+    out: src/generated
+    opt:
+      - target=ts
+      - import_extension=none
+inputs:
+  - directory: ../oscilloscope_interface
+  - directory: ../buf_connect_server/proto

@@ -1,0 +1,28 @@
+// FILE: control_panel_web/tsconfig.app.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": "src",
+    "paths": {
+      "api/*":        ["api/*"],
+      "features/*":  ["features/*"],
+      "pages/*":     ["pages/*"],
+      "generated/*": ["generated/*"]
+    }
+  },
+  "include": ["src"]
+}

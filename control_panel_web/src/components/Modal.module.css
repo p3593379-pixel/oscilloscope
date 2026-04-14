@@ -1,0 +1,8 @@
+.backdrop { position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:100; }
+.modal { background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(480px,90vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden; }
+.header { display:flex;align-items:center;justify-content:space-between;padding:.875rem 1rem;border-bottom:1px solid var(--border); }
+.title  { font-size:15px;font-weight:600; }
+.close  { color:var(--text-muted);padding:.25rem;border-radius:var(--radius-sm); }
+.close:hover { color:var(--text);background:var(--surface-2); }
+.body   { padding:1rem;overflow-y:auto;display:flex;flex-direction:column;gap:.75rem; }
+.footer { padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;gap:.5rem;justify-content:flex-end; }

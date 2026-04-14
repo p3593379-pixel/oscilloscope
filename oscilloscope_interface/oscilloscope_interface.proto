@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+// Device-specific RPCs for the oscilloscope backend.
+// Auth / session / admin RPCs live in buf_connect_server.proto.
+
+package oscilloscope_interface.v2;
+
+option java_multiple_files = true;
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum DecimationTier {
+  DECIMATION_TIER_UNSPECIFIED = 0;
+  DECIMATION_TIER_FULL        = 1;
+  DECIMATION_TIER_PREVIEW     = 2;
+}
+
+// ─── OscilloscopeService ──────────────────────────────────────────────────────
+
+message StreamDataRequest {
+  DecimationTier requested_tier     = 1;
+  uint32         max_bandwidth_mbps = 2;
+  string         stream_token       = 3;
+}
+
+message DataChunk {
+  bytes          samples         = 1;
+  uint64         sequence_number = 2;
+  uint64         timestamp_ns    = 3;
+  DecimationTier tier            = 4;
+  uint32         sample_rate_hz  = 5;
+  uint32         channels        = 6;
+}
+
+message GetSettingsRequest  {}
+
+message OscilloscopeSettings {
+  uint32 sample_rate_hz   = 1;
+  uint32 channels         = 2;
+  uint32 voltage_range_mv = 3;
+  uint32 trigger_level_mv = 4;
+  bool   trigger_enabled  = 5;
+}
+
+message GetSettingsResponse    { OscilloscopeSettings settings = 1; }
+message UpdateSettingsRequest  { OscilloscopeSettings settings = 1; }
+message UpdateSettingsResponse { OscilloscopeSettings settings = 1; }
+
+service OscilloscopeService {
+  rpc StreamData(StreamDataRequest)           returns (stream DataChunk);
+  rpc GetSettings(GetSettingsRequest)         returns (GetSettingsResponse);
+  rpc UpdateSettings(UpdateSettingsRequest)   returns (UpdateSettingsResponse);
+}
+
+// ─── ArchiveService ───────────────────────────────────────────────────────────
+
+message RequestDownloadRequest  { string file_path = 1; }
+message RequestDownloadResponse {
+  string download_url = 1;
+  string token        = 2;
+  uint32 ttl_seconds  = 3;
+  uint64 file_size    = 4;
+}
+
+service ArchiveService {
+  rpc RequestDownload(RequestDownloadRequest) returns (RequestDownloadResponse);
+}

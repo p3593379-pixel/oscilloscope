@@ -1,0 +1,7 @@
+version: v2
+plugins:
+  # Generates message types (_pb.ts files)
+  - local: protoc-gen-es
+    out: ../oscilloscope_web/src/generated
+    opt:
+      - target=ts

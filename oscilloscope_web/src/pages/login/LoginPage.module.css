@@ -1,0 +1,19 @@
+.root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.formLayer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: clamp(24px, 4vw, 56px);
+  pointer-events: none;
+}
+
+.formLayer > * {
+  pointer-events: auto;
+}

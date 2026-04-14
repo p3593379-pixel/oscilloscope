@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+// Generic auth / session / admin contract for buf_connect_server.
+// Every project using buf_connect_server gets these RPCs for free.
+// Device-specific services live in the project's own proto file.
+
+package buf_connect_server.v2;
+
+option java_multiple_files = true;
+
+// ─── Shared enums ─────────────────────────────────────────────────────────────
+
+enum UserRole {
+  USER_ROLE_UNSPECIFIED = 0;
+  USER_ROLE_ADMIN       = 1;
+  USER_ROLE_ENGINEER    = 2;
+}
+
+enum SessionMode {
+  SESSION_MODE_UNSPECIFIED  = 0;
+  SESSION_MODE_ACTIVE_ADMIN = 1;
+  SESSION_MODE_ACTIVE       = 2;
+  SESSION_MODE_OBSERVER     = 3;
+  SESSION_MODE_ON_SERVICE   = 4;
+}
+
+enum AdminConflictChoice {
+  ADMIN_CONFLICT_CHOICE_KEEP   = 0;
+  ADMIN_CONFLICT_CHOICE_GRANT  = 1;
+  ADMIN_CONFLICT_CHOICE_SNOOZE = 2;
+}
+
+// ─── AuthService ──────────────────────────────────────────────────────────────
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string      access_token = 1;
+  UserRole    role         = 2;
+  SessionMode session_mode = 3;
+  string      session_id   = 4;
+}
+
+message RefreshRequest {}
+
+message RefreshResponse {
+  string      access_token = 1;
+  UserRole    role         = 2;
+  SessionMode session_mode = 3;
+  string      session_id   = 4;
+}
+
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Refresh(RefreshRequest) returns (RefreshResponse);
+}
+
+// ─── SessionService ───────────────────────────────────────────────────────────
+
+message WatchSessionEventsRequest {}
+
+message AdminConflictEvent   { uint32 timeout_seconds = 1; bool snoozeable = 2; }
+message AdminPendingEvent    { uint32 occupied_for_seconds = 1; }
+message ConflictResolvedEvent { AdminConflictChoice resolution = 1; }
+message ForcedLogoutEvent    { string reason = 1; }
+message VacantRoleEvent      {}
+message OnServiceEvent       {}
+message ServiceEndedEvent    {}
+message RoleClaimedEvent     { string user_id = 1; }
+
+message SessionEvent {
+  oneof event {
+    AdminConflictEvent    admin_conflict    = 1;
+    AdminPendingEvent     admin_pending     = 2;
+    ConflictResolvedEvent conflict_resolved = 3;
+    ForcedLogoutEvent     forced_logout     = 4;
+    VacantRoleEvent       vacant_role       = 5;
+    OnServiceEvent        on_service        = 6;
+    ServiceEndedEvent     service_ended     = 7;
+    RoleClaimedEvent      role_claimed      = 8;
+  }
+}
+
+// GetStreamToken: issues a short-lived token authorising access to the
+// data plane. The token carries only sub + exp; tier negotiation happens
+// on the data plane after validation (Option A).
+message GetStreamTokenRequest  {}
+message GetStreamTokenResponse {
+  string stream_token = 1;
+  uint32 ttl_seconds  = 2;
+}
+
+message ClaimActiveRoleRequest  {}
+message ClaimActiveRoleResponse { bool granted = 1; string reason = 2; }
+
+message AdminConflictResponseRequest { AdminConflictChoice choice = 1; }
+
+message HeartbeatRequest  { string session_id = 1; }
+message HeartbeatResponse {}
+
+service SessionService {
+  rpc WatchSessionEvents(WatchSessionEventsRequest)       returns (stream SessionEvent);
+  rpc GetStreamToken(GetStreamTokenRequest)               returns (GetStreamTokenResponse);
+  rpc ClaimActiveRole(ClaimActiveRoleRequest)             returns (ClaimActiveRoleResponse);
+  rpc AdminConflictResponse(AdminConflictResponseRequest) returns (ClaimActiveRoleResponse);
+  rpc Heartbeat (HeartbeatRequest)                        returns (HeartbeatResponse);
+}
+
+// ─── AdminService ─────────────────────────────────────────────────────────────
+
+message ListUsersRequest  {}
+message UserInfo {
+  string   user_id    = 1;
+  string   username   = 2;
+  UserRole role       = 3;
+  int64    created_at = 4;
+  int64    last_login = 5;
+}
+message ListUsersResponse       { repeated UserInfo users = 1; }
+
+message CreateUserRequest       { string username = 1; string password = 2; UserRole role = 3; }
+message CreateUserResponse      { UserInfo user = 1; }
+
+message DeleteUserRequest       { string user_id = 1; }
+message DeleteUserResponse      { bool success = 1; }
+
+message ResetPasswordRequest    { string user_id = 1; string new_password = 2; }
+message ResetPasswordResponse   { bool success = 1; }
+
+service AdminService {
+  rpc ListUsers(ListUsersRequest)       returns (ListUsersResponse);
+  rpc CreateUser(CreateUserRequest)     returns (CreateUserResponse);
+  rpc DeleteUser(DeleteUserRequest)     returns (DeleteUserResponse);
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+}
