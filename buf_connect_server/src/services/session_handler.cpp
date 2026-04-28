@@ -1,37 +1,28 @@
 #include "buf_connect_server/services/session_handler.hpp"
-#include "buf_connect_server/connect/protocol.hpp"
-#include "buf_connect_server/connect/frame_codec.hpp"
-#include "buf_connect_server.pb.h"
+
 #include <spdlog/spdlog.h>
-#include <chrono>
-#include <thread>
+
+// Library headers
+#include "buf_connect_server/auth/jwt.hpp"
+#include "buf_connect_server/connect/request.hpp"
+#include "buf_connect_server/server.hpp"
+#include "buf_connect_server/session/session_manager.hpp"
+#include "buf_connect_server/auth/stream_token.hpp"
+#include "buf_connect_server/auth/middleware.hpp"
+
+// Generated protobuf
+#include "buf_connect_server.pb.h"
 
 namespace buf_connect_server::services {
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// SessionHandler — construction and route registration
+// ---------------------------------------------------------------------------
 
-    static std::vector<uint8_t> ExtractUnaryBody(
-            const connect::ParsedConnectRequest& req) {
-        if (req.body.size() < 5) return req.body;
-        auto decoded = connect::DecodeFrame(std::span<const uint8_t>(req.body));
-        if (decoded.bytes_consumed > 0)
-            return {decoded.payload.begin(), decoded.payload.end()};
-        return req.body;
-    }
+    SessionHandler::SessionHandler(session::SessionManager& mgr, auth::JwtIssuer& issuer)
+            : mgr_(mgr), issuer_(issuer) {}
 
-// ─── constructor ─────────────────────────────────────────────────────────────
-
-    SessionHandler::SessionHandler(session::SessionManager& mgr,
-                                   const AuthConfig&        auth_config)
-            : mgr_(mgr), auth_config_(auth_config) {
-        stream_token_    = std::make_shared<auth::StreamToken>(auth_config_.jwt_secret);
-        auth_middleware_ = std::make_shared<auth::AuthMiddleware>(
-                std::make_shared<auth::JwtUtils>(auth_config_.jwt_secret));
-    }
-
-    std::string SessionHandler::ServicePath() const {
-        return "/buf_connect_server.v2.SessionService";
-    }
+    SessionHandler::~SessionHandler() = default;
 
     void SessionHandler::RegisterRoutes(BufConnectServer& server) {
         server.RegisterControlRoute(
@@ -53,10 +44,10 @@ namespace buf_connect_server::services {
                     HandleClaimActiveRole(req, w);
                 });
         server.RegisterControlRoute(
-                "/buf_connect_server.v2.SessionService/AdminConflictResponse",
+                "/buf_connect_server.v2.SessionService/AdminConflict",
                 [this](const connect::ParsedConnectRequest& req,
                        connect::ConnectResponseWriter& w) {
-                    HandleAdminConflictResponse(req, w);
+                    HandleAdminConflict(req, w);
                 });
         server.RegisterControlRoute(
                 "/buf_connect_server.v2.SessionService/Heartbeat",
@@ -66,168 +57,299 @@ namespace buf_connect_server::services {
                 });
     }
 
-// ─── WatchSessionEvents ──────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// HandleWatchSessionEvents
+// ---------------------------------------------------------------------------
+// Long-lived server-sent stream.
+//
+// Changes from the pre-refactor version:
+//   - After mgr_.Connect(): check IsSessionInvalidated(session_id).
+//     If invalidated, immediately send ForcedLogoutEvent and close the stream.
+//   - session_id comes from the JWT ("session_id" claim), NOT from
+//     x-connection-id or x-session-id headers.
+// ---------------------------------------------------------------------------
 
-    void SessionHandler::HandleWatchSessionEvents(
-            const connect::ParsedConnectRequest& req,
-            connect::ConnectResponseWriter& writer) {
-        namespace c = connect;
-
-        auto auth_it = req.headers.find("authorization");
-        if (auth_it == req.headers.end()) {
-            writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-            writer.WriteError(std::string(c::kCodeUnauthenticated),
-                              "missing Authorization header");
+    void SessionHandler::HandleWatchSessionEvents(const connect::Request& req, connect::Response& res)
+    {
+        // ------------------------------------------------------------------
+        // 1. Authenticate via Bearer call_token.
+        // ------------------------------------------------------------------
+        auto claims_opt = auth::ExtractAndVerifyBearer(req, issuer_);
+        if (!claims_opt) {
+            spdlog::warn("session_handler: WatchSessionEvents — missing or invalid call_token");
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "valid call_token required");
             return;
         }
-        auto ctx = auth_middleware_->Authenticate(auth_it->second);
-        if (!ctx) {
-            writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-            writer.WriteError(std::string(c::kCodeUnauthenticated),
-                              "invalid or expired token");
+
+        const auth::JwtClaims& claims = *claims_opt;
+
+        if (claims.type != auth::kTokenTypeCallToken) {
+            spdlog::warn("session_handler: WatchSessionEvents — wrong token type '{}'",
+                         claims.type);
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "wrong token type");
             return;
         }
 
-        const std::string& session_id = ctx->session_id;
-        mgr_.Connect(session_id, ctx->user_id, ctx->role);
+        const std::string& user_id    = claims.sub;
+        const std::string& session_id = claims.session_id;  // from JWT, not from header
+        const std::string  role_str   = claims.role;
 
-        writer.SendHeaders(c::kHttpOk, std::string(c::kContentTypeConnectProto));
-        mgr_.Subscribe(session_id, &writer);
+        // ------------------------------------------------------------------
+        // 2. Derive UserRole from JWT claim.
+        // ------------------------------------------------------------------
+        session::UserRole role = (role_str == "admin")
+                                 ? session::UserRole::Admin
+                                 : session::UserRole::Engineer;
 
-        uint32_t tick_count = 0;
-        while (writer.IsClientConnected()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (++tick_count % 50 == 0)
-                mgr_.UpdateHeartbeat(session_id);
+        // ------------------------------------------------------------------
+        // 3. Assign a unique connection_id for this stream instance.
+        //    We use a combination of session_id and a monotonic counter so
+        //    that reconnects from the same session_id can be distinguished.
+        // ------------------------------------------------------------------
+        static std::atomic<uint64_t> conn_counter{0};
+        std::string connection_id = session_id + ":" +
+                                    std::to_string(conn_counter.fetch_add(1));
+
+        spdlog::info("session_handler: WatchSessionEvents opening "
+                     "user='{}' session='{}' conn='{}'",
+                     user_id, session_id, connection_id);
+
+        // ------------------------------------------------------------------
+        // 4. Set up the streaming response.
+        //    The callback captures the Response reference; it must not outlive
+        //    this stack frame (the server framework guarantees this).
+        // ------------------------------------------------------------------
+        res.SetStatus(200);
+        res.StartStream();
+
+        auto send_event = [&res](const buf_connect_server::v2::SessionEvent& ev) -> bool {
+            return res.SendStreamMessage(ev);
+        };
+
+        // ------------------------------------------------------------------
+        // 5. Connect to SessionManager.
+        // ------------------------------------------------------------------
+        session::SessionMode mode = mgr_.CreateSession(session_id, connection_id,
+                                                       user_id, role, send_event);
+
+        // ------------------------------------------------------------------
+        // 6. Post-connect invalidation check.
+        //    Connect() itself checks for invalidation before registering the
+        //    session.  This second check catches the race where TakeOver fires
+        //    between the Connect return and here.
+        //    The SessionStartedEvent has already been sent; sending a
+        //    ForcedLogoutEvent right after is correct — the client must honour
+        //    the last event.
+        // ------------------------------------------------------------------
+        if (mode == session::SessionMode::Observer &&
+            mgr_.IsSessionInvalidated(session_id)) {
+            spdlog::info("session_handler: WatchSessionEvents — session '{}' is "
+                         "invalidated, closing stream immediately", session_id);
+            // ForcedLogoutEvent was already sent by Connect(); close the stream.
+            res.EndStream();
+            mgr_.Disconnect(session_id, user_id);
+            return;
         }
 
-        mgr_.Unsubscribe(session_id);
-        mgr_.Disconnect(session_id);
-        writer.WriteEndOfStream();
-        spdlog::info("WatchSessionEvents stream closed for connection '{}'",
-                     session_id);
+        // ------------------------------------------------------------------
+        // 7. Block until the client disconnects or the stream is ended by the
+        //    session manager (e.g. ForcedLogoutEvent closes the pipe).
+        // ------------------------------------------------------------------
+        res.WaitForStreamClose();
+
+        // ------------------------------------------------------------------
+        // 8. Disconnect from SessionManager.
+        // ------------------------------------------------------------------
+        spdlog::info("session_handler: WatchSessionEvents closing "
+                     "user='{}' session='{}'", user_id, session_id);
+        mgr_.Disconnect(session_id, user_id);
+        res.EndStream();
     }
 
-// ─── GetStreamToken ───────────────────────────────────────────────────────────
-// Option A: token carries only sub + exp; tier is negotiated on the data plane.
+// ---------------------------------------------------------------------------
+// HandleGetStreamToken
+// ---------------------------------------------------------------------------
+// Issues a short-lived HMAC stream token so the client can open a data-plane
+// StreamData RPC without sending a long-lived credential.
 
-    void SessionHandler::HandleGetStreamToken(
-            const connect::ParsedConnectRequest& req,
-            connect::ConnectResponseWriter& w) {
-        namespace c = connect;
-
-        auto auth_it = req.headers.find("authorization");
-        if (auth_it == req.headers.end()) {
-            w.SendHeaders(c::kHttpUnauthorized, "application/json");
-            w.WriteError(std::string(c::kCodeUnauthenticated),
-                         "missing Authorization header");
-            return;
-        }
-        auto ctx = auth_middleware_->Authenticate(auth_it->second);
-        if (!ctx) {
-            w.SendHeaders(c::kHttpUnauthorized, "application/json");
-            w.WriteError(std::string(c::kCodeUnauthenticated),
-                         "invalid or expired token");
+    void SessionHandler::HandleGetStreamToken(const connect::Request& req,
+                                              connect::Response&       res) {
+        auto claims_opt = auth::ExtractAndVerifyBearer(req, issuer_);
+        if (!claims_opt) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "valid call_token required");
             return;
         }
 
-        auto now = std::chrono::system_clock::to_time_t(
-                std::chrono::system_clock::now());
-        auth::StreamTokenClaims claims;
-        claims.sub  = ctx->user_id;
-        claims.tier = "";   // tier-agnostic (Option A)
-        claims.iat  = now;
-        claims.exp  = now + auth_config_.stream_token_ttl_seconds;
-        auto token  = stream_token_->Issue(claims);
+        const auth::JwtClaims& claims = *claims_opt;
+        if (claims.type != auth::kTokenTypeCallToken) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "wrong token type");
+            return;
+        }
 
-        v2::GetStreamTokenResponse resp;
-        resp.set_stream_token(token);
-        resp.set_ttl_seconds(auth_config_.stream_token_ttl_seconds);
+        std::string stream_token = auth::IssueStreamToken(claims.sub,
+                                                          claims.session_id,
+                                                          claims.role);
 
-        std::vector<uint8_t> out(resp.ByteSizeLong());
-        resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
-        w.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
-                            std::span<const uint8_t>(out));
+        buf_connect_server::v2::GetStreamTokenResponse resp;
+        resp.set_stream_token(stream_token);
+
+        res.SetStatus(200);
+        res.EncodeBody(resp);
     }
 
-// ─── ClaimActiveRole ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// HandleHeartbeat
+// ---------------------------------------------------------------------------
+// Updates the last-heartbeat timestamp for the session identified in the JWT.
+// No changes from pre-refactor behaviour.
 
-    void SessionHandler::HandleClaimActiveRole(
-            const connect::ParsedConnectRequest& req,
-            connect::ConnectResponseWriter& w) {
-        namespace c = connect;
-
-        auto connection_id = req.headers.count("x-connection-id")
-                             ? req.headers.at("x-connection-id") : "";
-        auto result = mgr_.ClaimActiveRole(connection_id);
-
-        v2::ClaimActiveRoleResponse resp;
-        resp.set_granted(result.accepted);
-        resp.set_reason(result.reason);
-        std::vector<uint8_t> out(resp.ByteSizeLong());
-        resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
-        w.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
-                            std::span<const uint8_t>(out));
-    }
-
-// ─── AdminConflictResponse ────────────────────────────────────────────────────
-
-    void SessionHandler::HandleAdminConflictResponse(
-            const connect::ParsedConnectRequest& req,
-            connect::ConnectResponseWriter& w) {
-        namespace c = connect;
-
-        auto body = ExtractUnaryBody(req);
-        v2::AdminConflictResponseRequest conflict_req;
-        if (!conflict_req.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
-            w.SendHeaders(c::kHttpBadRequest, "application/json");
-            w.WriteError(std::string(c::kCodeInvalidArgument), "parse error");
+    void SessionHandler::HandleHeartbeat(const connect::Request& req,
+                                         connect::Response&       res) {
+        auto claims_opt = auth::ExtractAndVerifyBearer(req, issuer_);
+        if (!claims_opt) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "valid call_token required");
             return;
         }
 
-        std::string choice;
-        switch (conflict_req.choice()) {
-            case v2::ADMIN_CONFLICT_CHOICE_GRANT:  choice = "GRANT";  break;
-            case v2::ADMIN_CONFLICT_CHOICE_SNOOZE: choice = "SNOOZE"; break;
-            default:                               choice = "KEEP";   break;
-        }
-
-        auto connection_id = req.headers.count("x-connection-id")
-                             ? req.headers.at("x-connection-id") : "";
-        mgr_.AdminConflictResponse(connection_id, choice);
-
-        v2::ClaimActiveRoleResponse resp;
-        resp.set_granted(true);
-        resp.set_reason(choice);
-        std::vector<uint8_t> out(resp.ByteSizeLong());
-        resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
-        w.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
-                            std::span<const uint8_t>(out));
-    }
-
-    void SessionHandler::HandleHeartbeat(
-            const connect::ParsedConnectRequest& req,
-            connect::ConnectResponseWriter& w) {
-        namespace c = connect;
-        auto auth_it = req.headers.find("authorization");
-        if (auth_it == req.headers.end()) {
-            w.SendHeaders(c::kHttpUnauthorized, "application/json");
-            w.WriteError(std::string(c::kCodeUnauthenticated), "missing token");
+        const auth::JwtClaims& claims = *claims_opt;
+        if (claims.type != auth::kTokenTypeCallToken) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "wrong token type");
             return;
         }
-        auto ctx = auth_middleware_->Authenticate(auth_it->second);
-        if (!ctx) {
-            w.SendHeaders(c::kHttpUnauthorized, "application/json");
-            w.WriteError(std::string(c::kCodeUnauthenticated), "invalid token");
-            return;
-        }
-        mgr_.UpdateHeartbeat(ctx->session_id);
 
-        v2::HeartbeatResponse resp;
-        std::vector<uint8_t> out(resp.ByteSizeLong());
-        resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
-        w.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
-                            std::span<const uint8_t>(out));
+        // Decode request body — the session_id field in the body is informational;
+        // the authoritative session_id comes from the JWT.
+        buf_connect_server::v2::HeartbeatRequest hb_req;
+        req.DecodeBody(hb_req); // tolerate failure — session_id comes from JWT
+
+        const std::string& session_id = claims.session_id;
+
+        mgr_.UpdateHeartbeat(session_id);
+
+        buf_connect_server::v2::HeartbeatResponse hb_res;
+        res.SetStatus(200);
+        res.EncodeBody(hb_res);
+
+        spdlog::debug("session_handler: Heartbeat session='{}'", session_id);
     }
 
-}  // namespace buf_connect_server::services
+// ---------------------------------------------------------------------------
+// HandleClaimActiveRole
+// ---------------------------------------------------------------------------
+// Attempts to promote an Observer session to an active role.
+//
+// Changed from pre-refactor:
+//   - session_id is now read from the JWT ("session_id" claim) rather than
+//     from the x-connection-id HTTP header.
+// ---------------------------------------------------------------------------
+
+    void SessionHandler::HandleClaimActiveRole(const connect::Request& req,
+                                               connect::Response&       res) {
+        // ------------------------------------------------------------------
+        // 1. Authenticate.
+        // ------------------------------------------------------------------
+        auto claims_opt = auth::ExtractAndVerifyBearer(req, issuer_);
+        if (!claims_opt) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "valid call_token required");
+            return;
+        }
+
+        const auth::JwtClaims& claims = *claims_opt;
+        if (claims.type != auth::kTokenTypeCallToken) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "wrong token type");
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // 2. Read session_id from JWT (NOT from x-connection-id header).
+        // ------------------------------------------------------------------
+        const std::string& session_id = claims.session_id;
+
+        spdlog::info("session_handler: ClaimActiveRole session='{}'", session_id);
+
+        // ------------------------------------------------------------------
+        // 3. Ask SessionManager to promote the session.
+        // ------------------------------------------------------------------
+        session::SessionMode new_mode = mgr_.ClaimActiveRole(session_id);
+
+        // ------------------------------------------------------------------
+        // 4. Respond.
+        // ------------------------------------------------------------------
+        buf_connect_server::v2::ClaimActiveRoleResponse role_res;
+        role_res.set_session_mode(
+                static_cast<buf_connect_server::v2::SessionMode>(new_mode));
+
+        res.SetStatus(200);
+        res.EncodeBody(role_res);
+    }
+
+// ---------------------------------------------------------------------------
+// HandleAdminConflict
+// ---------------------------------------------------------------------------
+// The incumbent admin responds to a conflict challenge.
+//
+// Changed from pre-refactor:
+//   - session_id is now read from the JWT ("session_id" claim) rather than
+//     from the x-connection-id HTTP header.
+// ---------------------------------------------------------------------------
+
+    void SessionHandler::HandleAdminConflict(const connect::Request& req,
+                                             connect::Response&       res) {
+        // ------------------------------------------------------------------
+        // 1. Authenticate.
+        // ------------------------------------------------------------------
+        auto claims_opt = auth::ExtractAndVerifyBearer(req, issuer_);
+        if (!claims_opt) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "valid call_token required");
+            return;
+        }
+
+        const auth::JwtClaims& claims = *claims_opt;
+        if (claims.type != auth::kTokenTypeCallToken) {
+            res.SetStatus(401);
+            res.SetError("unauthenticated", "wrong token type");
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // 2. Decode request body.
+        // ------------------------------------------------------------------
+        buf_connect_server::v2::AdminConflictRequest conflict_req;
+        if (!req.DecodeBody(conflict_req)) {
+            res.SetStatus(400);
+            res.SetError("invalid_request", "Failed to decode AdminConflictRequest");
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // 3. Read session_id from JWT (NOT from x-connection-id header).
+        // ------------------------------------------------------------------
+        const std::string& session_id = claims.session_id;
+
+        spdlog::info("session_handler: AdminConflict session='{}' choice={}",
+                     session_id, static_cast<int>(conflict_req.choice()));
+
+        // ------------------------------------------------------------------
+        // 4. Forward to SessionManager.
+        // ------------------------------------------------------------------
+        mgr_.HandleAdminConflictChoice(session_id,
+                                       static_cast<int>(conflict_req.choice()));
+
+        // ------------------------------------------------------------------
+        // 5. Respond.
+        // ------------------------------------------------------------------
+        buf_connect_server::v2::AdminConflictResponse conflict_res;
+        res.SetStatus(200);
+        res.EncodeBody(conflict_res);
+    }
+
+} // namespace buf_connect_server::services

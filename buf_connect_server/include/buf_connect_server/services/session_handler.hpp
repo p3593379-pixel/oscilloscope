@@ -15,8 +15,7 @@ namespace buf_connect_server::services {
 // Registered automatically by BufConnectServer::Start().
     class SessionHandler final : public ServiceHandlerBase {
     public:
-        SessionHandler(session::SessionManager& mgr,
-                       const AuthConfig&        auth_config);
+        SessionHandler(session::SessionManager& mgr, const AuthConfig& auth_config);
 
         std::string ServicePath() const override;
         void RegisterRoutes(BufConnectServer& server) override;
@@ -27,16 +26,11 @@ namespace buf_connect_server::services {
         std::shared_ptr<auth::StreamToken>      stream_token_;
         std::shared_ptr<auth::AuthMiddleware>   auth_middleware_;
 
-        void HandleWatchSessionEvents(const connect::ParsedConnectRequest&,
-                                      connect::ConnectResponseWriter&);
-        void HandleGetStreamToken(const connect::ParsedConnectRequest&,
-                                  connect::ConnectResponseWriter&);
-        void HandleClaimActiveRole(const connect::ParsedConnectRequest&,
-                                   connect::ConnectResponseWriter&);
-        void HandleAdminConflictResponse(const connect::ParsedConnectRequest&,
-                                         connect::ConnectResponseWriter&);
-        void HandleHeartbeat(const connect::ParsedConnectRequest& req,
-                connect::ConnectResponseWriter& w);
+        void HandleWatchSessionEvents(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
+        void HandleGetStreamToken(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
+        void HandleClaimActiveRole(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
+        void HandleAdminConflict(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
+        void HandleHeartbeat(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
     };
 
 }  // namespace buf_connect_server::services

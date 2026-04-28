@@ -1,54 +1,66 @@
 import { create } from 'zustand';
 import { SessionMode, UserRole } from '@/generated/buf_connect_server_pb';
 
+interface SessionConflictInfo {
+  startedAtUtc: string;
+  role: string;
+}
+
 interface AuthState {
-  bootstrapping:   boolean;
   isAuthenticated: boolean;
-  accessToken:     string | null;
+  callToken:       string | null;
   streamToken:     string | null;
-  sessionId:       string | null;  // per-tab identity
-  tokenExp:        number;         // Unix epoch seconds, for scheduling refresh
+  sessionId:       string | null;
+  tokenExp:        number;
   role:            UserRole;
   sessionMode:     SessionMode;
+  sessionConflict: SessionConflictInfo | null;
+  logoutReason:    string | null;
 
   setAuth: (params: {
-    accessToken: string;
+    callToken:   string;
     role:        UserRole;
     sessionMode: SessionMode;
     sessionId:   string;
     tokenExp:    number;
   }) => void;
-  setBootstrapping: (v: boolean) => void;
-  setStreamToken:  (token: string) => void;
-  setSessionMode:  (mode: SessionMode) => void;
-  clearAuth:       () => void;
+  setCallToken:        (token: string) => void;
+  setStreamToken:      (token: string) => void;
+  setSessionMode:      (mode: SessionMode) => void;
+  setSessionConflict:  (info: SessionConflictInfo | null) => void;
+  setLogoutReason:     (reason: string | null) => void;
+  clearAuth:           () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  bootstrapping: true,
   isAuthenticated: false,
-  accessToken:     null,
+  callToken:       null,
   streamToken:     null,
-  sessionId:     null,
-  tokenExp:      0,
+  sessionId:       null,
+  tokenExp:        0,
   role:            UserRole.UNSPECIFIED,
   sessionMode:     SessionMode.UNSPECIFIED,
+  sessionConflict: null,
+  logoutReason:    null,
 
-  setAuth: ({ accessToken, role, sessionMode, sessionId, tokenExp }) =>
-      set({ isAuthenticated: true, accessToken, role, sessionMode, sessionId, tokenExp }),
+  setAuth: ({ callToken, role, sessionMode, sessionId, tokenExp }) =>
+      set({ isAuthenticated: true, callToken, role, sessionMode, sessionId, tokenExp,
+        sessionConflict: null, logoutReason: null }),
 
-  setBootstrapping: (v) => set({ bootstrapping: v }),
+  setCallToken:     (token) => set({ callToken: token }),
+  setStreamToken:     (token) => set({ streamToken: token }),
+  setSessionMode:     (mode)  => set({ sessionMode: mode }),
+  setSessionConflict: (info)  => set({ sessionConflict: info }),
+  setLogoutReason:    (reason) => set({ logoutReason: reason }),
 
-  setStreamToken: (token) => set({ streamToken: token }),
-
-  setSessionMode: (mode) => set({ sessionMode: mode }),
-
-  clearAuth: () =>
-      set({
-        isAuthenticated: false,
-        accessToken:     null,
-        streamToken:     null,
-        role:            UserRole.UNSPECIFIED,
-        sessionMode:     SessionMode.UNSPECIFIED,
-      }),
+  clearAuth: () => set({
+    isAuthenticated: false,
+    callToken:       null,
+    streamToken:     null,
+    sessionId:       null,
+    tokenExp:        0,
+    role:            UserRole.UNSPECIFIED,
+    sessionMode:     SessionMode.UNSPECIFIED,
+    sessionConflict: null,
+  }),
 }));

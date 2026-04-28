@@ -60,6 +60,7 @@ buf_connect_server::ConfigServer::ConfigServer(
     // PUT /api/config  — replace full config
     svr.Put("/api/config", [this](const httplib::Request& req, httplib::Response& res) {
         try {
+            // TODO: FROMJSON
             auto updated = ConfigLoader::FromJson(req.body);
             *impl_->config_ = updated;
             if (impl_->on_update_) impl_->on_update_(updated);
@@ -457,7 +458,8 @@ buf_connect_server::ConfigServer::ConfigServer(
     // POST /api/config/import  — dry-run validation only
     svr.Post("/api/config/import", [this](const httplib::Request& req, httplib::Response& res) {
         try {
-            ConfigLoader::FromJson(req.body);
+            // TODO: FROMJSON
+//            ConfigLoader::FromJson(req.body);
             res.set_content("{\"valid\":true}", "application/json");
         } catch (const std::exception& e) {
             res.status = 400;

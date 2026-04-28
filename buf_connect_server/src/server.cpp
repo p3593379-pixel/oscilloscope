@@ -33,7 +33,7 @@ public:
     // Owned subsystems
     auth::UserStore                          user_store_;
     session::SessionManager                  session_manager_;
-    std::shared_ptr<auth::JwtUtils>          jwt_utils_;
+    std::shared_ptr<auth::JwtIssuer>          jwt_issuer_;
     std::shared_ptr<auth::AuthMiddleware>    auth_middleware_;
 
     // Transport planes (constructed after config is fully set)
@@ -48,9 +48,10 @@ public:
     explicit Impl(ServerConfig cfg)
             : config_(std::move(cfg)),
               user_store_(config_.user_db_path) {
-        jwt_utils_       = std::make_shared<auth::JwtUtils>(config_.auth.jwt_secret);
-        auth_middleware_ = std::make_shared<auth::AuthMiddleware>(jwt_utils_);
-        session_manager_.StartExpiryLoop(config_.auth.access_token_ttl_seconds);
+        jwt_issuer_       = std::make_shared<auth::JwtIssuer>(config_.auth.jwt_secret);
+        auth_middleware_ = std::make_shared<auth::AuthMiddleware>(jwt_issuer_);
+        session_manager_.StartExpiryLoop(config_.session.grace_period_admin_seconds,
+                                         config_.session.grace_period_engineer_seconds);
 
         control_plane_ = std::make_unique<transport::ControlPlane>(config_.control_plane);
 
@@ -122,15 +123,15 @@ void buf_connect_server::BufConnectServer::Start()
 
     // Auto-register built-in handlers — auth / session / admin
     auto auth_h    = std::make_shared<services::AuthHandler>(
-            impl_->user_store_, impl_->config_.auth);
-    auto session_h = std::make_shared<services::SessionHandler>(
-            impl_->session_manager_, impl_->config_.auth);
-    auto admin_h   = std::make_shared<services::AdminHandler>(
-            impl_->user_store_, impl_->config_.auth);
+            impl_->user_store_, impl_->config_.auth, impl_->session_manager_);
+//    auto session_h = std::make_shared<services::SessionHandler>(
+//            impl_->session_manager_, impl_->config_.auth);
+//    auto admin_h   = std::make_shared<services::AdminHandler>(
+//            impl_->user_store_, impl_->config_.auth);
 
     auth_h->RegisterRoutes(*this);
-    session_h->RegisterRoutes(*this);
-    admin_h->RegisterRoutes(*this);
+//    session_h->RegisterRoutes(*this);
+//    admin_h->RegisterRoutes(*this);
 
     // Start the h2c/h2 transport planes
     impl_->control_plane_->Start();

@@ -10,7 +10,7 @@ namespace buf_connect_server::services {
                                const AuthConfig& auth_config)
             : user_store_(user_store) {
         auth_middleware_ = std::make_shared<auth::AuthMiddleware>(
-                std::make_shared<auth::JwtUtils>(auth_config.jwt_secret));
+                std::make_shared<auth::JwtIssuer>(auth_config.jwt_secret));
     }
 
     std::string AdminHandler::ServicePath() const {

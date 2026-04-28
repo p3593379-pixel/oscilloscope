@@ -6,6 +6,7 @@
 #include "buf_connect_server/auth/user_store.hpp"
 #include "buf_connect_server/session/session_manager.hpp"
 #include "buf_connect_server/connect/request.hpp"
+#include "buf_connect_server/connect/response_writer.hpp"
 #include <memory>
 
 namespace buf_connect_server {

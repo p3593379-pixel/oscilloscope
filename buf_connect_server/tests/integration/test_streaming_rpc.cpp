@@ -75,7 +75,7 @@ TEST(StreamingRpcTest, WritesStopAfterDisconnect) {
 
 TEST(StreamingRpcTest, SessionSubscribeUnsubscribe) {
     session::SessionManager mgr;
-    mgr.Connect("conn-1", "eng-1", "engineer");
+    mgr.CreateSession("conn-1", "eng-1", "engineer");
 
     // Build a writer that tracks frames
     std::vector<std::vector<uint8_t>> frames;
@@ -89,7 +89,7 @@ TEST(StreamingRpcTest, SessionSubscribeUnsubscribe) {
     mgr.Subscribe("conn-1", &writer);
 
     // Connect a second session to trigger a broadcast event
-    mgr.Connect("conn-2", "eng-2", "engineer");
+    mgr.CreateSession("conn-2", "eng-2", "engineer");
 
     mgr.Unsubscribe("conn-1");
     mgr.Disconnect("conn-1");
@@ -133,9 +133,9 @@ TEST(StreamingRpcTest, ConcurrentSessionConnectsAreThreadSafe) {
     std::atomic<int> active_count{0};
 
     auto connect_fn = [&](int id) {
-        mgr.Connect("conn-" + std::to_string(id),
-                    "user-" + std::to_string(id),
-                    "engineer");
+        mgr.CreateSession("conn-" + std::to_string(id),
+                          "user-" + std::to_string(id),
+                          "engineer");
         ++active_count;
     };
 

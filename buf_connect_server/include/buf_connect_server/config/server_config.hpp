@@ -1,8 +1,6 @@
-#ifndef BUF_CONNECT_SERVER_CONFIG_SERVER_CONFIG_HPP
-#define BUF_CONNECT_SERVER_CONFIG_SERVER_CONFIG_HPP
+#pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 
 namespace buf_connect_server {
@@ -23,15 +21,27 @@ namespace buf_connect_server {
 
     struct AuthConfig {
         std::string jwt_secret;
+
+        // Legacy field names — kept for backward compatibility with existing config loaders
         uint32_t    access_token_ttl_seconds  = 5;
         uint32_t    refresh_token_ttl_seconds = 604800;
         uint32_t    stream_token_ttl_seconds  = 30;
+
+        // New canonical field names
+        uint32_t    call_token_ttl_seconds     = 5;
+        uint32_t    session_ticket_ttl_seconds = 86400;
     };
 
     struct SessionConfig {
+        // Existing fields — preserved as-is
         uint32_t admin_conflict_timeout_seconds = 20;
         uint32_t snooze_duration_seconds        = 5;
         uint32_t max_concurrent_sessions        = 0;
+
+        // New fields
+        uint32_t heartbeat_interval_seconds     = 20;
+        uint32_t grace_period_admin_seconds     = 45;
+        uint32_t grace_period_engineer_seconds  = 90;
     };
 
     struct StreamingConfig {
@@ -45,12 +55,13 @@ namespace buf_connect_server {
     };
 
     struct LogConfig {
-        std::string level       = "info";
-        std::string destination = "stdout";
-        std::string file_path   = "buf_connect_server.log";
-        uint32_t    max_size_mb = 64;
-        uint32_t    max_files   = 5;
-        bool        access_log  = true;
+        std::string level        = "info";
+        std::string destination  = "console";
+        std::string file_path    = "buf_connect_server.log";
+        bool        console      = true;
+        uint32_t    max_size_mb  = 64;
+        uint32_t    max_files    = 6;
+        bool        access_log   = true;
     };
 
     struct MetricsConfig {
@@ -67,11 +78,8 @@ namespace buf_connect_server {
         StreamingConfig streaming;
         LogConfig       log;
         MetricsConfig   metrics;
-        // Path to the SQLite user database.  BufConnectServer owns the UserStore.
-        std::string     user_db_path          = "users.db";
-        std::string     config_server_path    = "/api/config";
+        std::string     user_db_path       = "users.db";
+        std::string     config_server_path = "/api/config";
     };
 
 }  // namespace buf_connect_server
-
-#endif  // BUF_CONNECT_SERVER_CONFIG_SERVER_CONFIG_HPP

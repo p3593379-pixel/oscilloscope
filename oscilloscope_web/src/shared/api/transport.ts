@@ -6,19 +6,17 @@ import {CONTROL_PLANE_URL, DATA_PLANE_URL} from "@/shared/config/env.ts";
  * and all device-specific RPCs that go through the nginx control plane.
  * The Authorization header is injected per-call by the hooks that use this.
  */
-export function makeControlTransport(accessToken?: string) {
-  return createConnectTransport({
-    baseUrl: CONTROL_PLANE_URL,
-    useBinaryFormat: true,
-    interceptors: accessToken
-        ? [
-          (next) => (req) => {
-            req.header.set('Authorization', `Bearer ${accessToken}`);
-            return next(req);
-          },
-        ]
-        : [],
-  });
+export function makeControlTransport(callToken?: string) {
+    return createConnectTransport({
+        baseUrl: CONTROL_PLANE_URL,
+        useBinaryFormat: true,
+        interceptors: callToken
+            ? [(next) => (req) => {
+                req.header.set('Authorization', `Bearer ${callToken}`);
+                return next(req);
+            }]
+            : [],
+    });
 }
 
 /**

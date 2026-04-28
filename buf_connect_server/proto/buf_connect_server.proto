@@ -1,138 +1,192 @@
 syntax = "proto3";
 
-// Generic auth / session / admin contract for buf_connect_server.
-// Every project using buf_connect_server gets these RPCs for free.
-// Device-specific services live in the project's own proto file.
-
 package buf_connect_server.v2;
 
-option java_multiple_files = true;
+option go_package = "buf_connect_server/v2;buf_connect_server_v2";
 
-// ─── Shared enums ─────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Shared enums
+// ---------------------------------------------------------------------------
 
 enum UserRole {
   USER_ROLE_UNSPECIFIED = 0;
-  USER_ROLE_ADMIN       = 1;
-  USER_ROLE_ENGINEER    = 2;
+  USER_ROLE_ENGINEER    = 1;
+  USER_ROLE_ADMIN       = 2;
 }
 
 enum SessionMode {
-  SESSION_MODE_UNSPECIFIED  = 0;
-  SESSION_MODE_ACTIVE_ADMIN = 1;
-  SESSION_MODE_ACTIVE       = 2;
-  SESSION_MODE_OBSERVER     = 3;
-  SESSION_MODE_ON_SERVICE   = 4;
+  SESSION_MODE_UNSPECIFIED = 0;
+  SESSION_MODE_ACTIVE      = 1;
+  SESSION_MODE_ACTIVE_ADMIN = 2;
+  SESSION_MODE_OBSERVER    = 3;
+  SESSION_MODE_ON_SERVICE  = 4;
 }
 
 enum AdminConflictChoice {
-  ADMIN_CONFLICT_CHOICE_KEEP   = 0;
-  ADMIN_CONFLICT_CHOICE_GRANT  = 1;
-  ADMIN_CONFLICT_CHOICE_SNOOZE = 2;
+  ADMIN_CONFLICT_CHOICE_UNSPECIFIED = 0;
+  ADMIN_CONFLICT_CHOICE_GRANT       = 1;
+  ADMIN_CONFLICT_CHOICE_KEEP        = 2;
+  ADMIN_CONFLICT_CHOICE_SNOOZE      = 3;
 }
 
-// ─── AuthService ──────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// AuthService
+// ---------------------------------------------------------------------------
+
+// Conflict details for a pre-existing live session
+message SessionConflictInfo {
+  string started_at_utc = 1;  // ISO-8601 UTC string, e.g. "2026-04-23T12:00:00Z"
+  string role           = 2;  // "engineer" or "admin"
+}
 
 message LoginRequest {
   string username = 1;
   string password = 2;
 }
 
+// call_token is absent (empty) when session_conflict == true.
+// In that case, inspect conflict_info and call TakeOver if the user wants to
+// displace the existing session.
 message LoginResponse {
-  string      access_token = 1;
-  UserRole    role         = 2;
-  SessionMode session_mode = 3;
-  string      session_id   = 4;
+  string              call_token       = 1;
+  UserRole            role             = 2;
+  SessionMode         session_mode     = 3;
+  string              session_id       = 4;
+  bool                session_conflict = 5;
+  SessionConflictInfo conflict_info    = 6;
 }
 
-message RefreshRequest {}
+// RenewCallToken — replaces the old "Refresh" RPC.
+// The client presents the HttpOnly session_ticket cookie; the server issues a
+// fresh call_token JWT and rotates the session_ticket cookie.
+message RenewCallTokenRequest  {}
+message RenewCallTokenResponse {
+  string call_token = 1;
+}
 
-message RefreshResponse {
-  string      access_token = 1;
+// TakeOver — forcibly displaces an existing live session for the same user.
+// Requires a valid session_ticket cookie (issued by the conflicting Login call).
+// The old session receives a ForcedLogoutEvent with reason "taken_over".
+message TakeOverRequest  {}
+message TakeOverResponse {
+  string      call_token   = 1;
   UserRole    role         = 2;
   SessionMode session_mode = 3;
   string      session_id   = 4;
 }
 
 service AuthService {
-  rpc Login(LoginRequest) returns (LoginResponse);
-  rpc Refresh(RefreshRequest) returns (RefreshResponse);
+  rpc Login          (LoginRequest)          returns (LoginResponse);
+  rpc RenewCallToken (RenewCallTokenRequest) returns (RenewCallTokenResponse);
+  rpc TakeOver       (TakeOverRequest)       returns (TakeOverResponse);
 }
 
-// ─── SessionService ───────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// SessionService
+// ---------------------------------------------------------------------------
 
-message WatchSessionEventsRequest {}
-
-message AdminConflictEvent   { uint32 timeout_seconds = 1; bool snoozeable = 2; }
-message AdminPendingEvent    { uint32 occupied_for_seconds = 1; }
-message ConflictResolvedEvent { AdminConflictChoice resolution = 1; }
-message ForcedLogoutEvent    { string reason = 1; }
-message VacantRoleEvent      {}
-message OnServiceEvent       {}
-message ServiceEndedEvent    {}
-message RoleClaimedEvent     { string user_id = 1; }
-
-message SessionEvent {
-  oneof event {
-    AdminConflictEvent    admin_conflict    = 1;
-    AdminPendingEvent     admin_pending     = 2;
-    ConflictResolvedEvent conflict_resolved = 3;
-    ForcedLogoutEvent     forced_logout     = 4;
-    VacantRoleEvent       vacant_role       = 5;
-    OnServiceEvent        on_service        = 6;
-    ServiceEndedEvent     service_ended     = 7;
-    RoleClaimedEvent      role_claimed      = 8;
-  }
-}
-
-// GetStreamToken: issues a short-lived token authorising access to the
-// data plane. The token carries only sub + exp; tier negotiation happens
-// on the data plane after validation (Option A).
 message GetStreamTokenRequest  {}
 message GetStreamTokenResponse {
   string stream_token = 1;
-  uint32 ttl_seconds  = 2;
 }
 
-message ClaimActiveRoleRequest  {}
-message ClaimActiveRoleResponse { bool granted = 1; string reason = 2; }
-
-message AdminConflictResponseRequest { AdminConflictChoice choice = 1; }
-
-message HeartbeatRequest  { string session_id = 1; }
+message HeartbeatRequest {
+  string session_id = 1;
+}
 message HeartbeatResponse {}
 
-service SessionService {
-  rpc WatchSessionEvents(WatchSessionEventsRequest)       returns (stream SessionEvent);
-  rpc GetStreamToken(GetStreamTokenRequest)               returns (GetStreamTokenResponse);
-  rpc ClaimActiveRole(ClaimActiveRoleRequest)             returns (ClaimActiveRoleResponse);
-  rpc AdminConflictResponse(AdminConflictResponseRequest) returns (ClaimActiveRoleResponse);
-  rpc Heartbeat (HeartbeatRequest)                        returns (HeartbeatResponse);
+message ClaimActiveRoleRequest {}
+message ClaimActiveRoleResponse {
+  SessionMode session_mode = 1;
 }
 
-// ─── AdminService ─────────────────────────────────────────────────────────────
+// AdminConflictResponse — the incumbent admin responds to a conflict event.
+message AdminConflictRequest {
+  AdminConflictChoice choice = 1;
+}
+message AdminConflictResponse {}
+
+// WatchSessionEvents — long-lived server-sent stream.
+message WatchSessionEventsRequest {}
+
+// SessionEvent — the outer envelope; exactly one inner event is set.
+message SessionEvent {
+  oneof event {
+    SessionStartedEvent      session_started       = 1;
+    ForcedLogoutEvent        forced_logout         = 2;
+    AdminConflictEvent       admin_conflict        = 3;
+    ModeChangedEvent         mode_changed          = 4;
+  }
+}
+
+message SessionStartedEvent {
+  string      session_id   = 1;
+  SessionMode session_mode = 2;
+  UserRole    role         = 3;
+}
+
+// ForcedLogoutEvent
+// Known reason values:
+//   "taken_over"      — another login for the same user called TakeOver
+//   "session_expired" — the session was idle beyond its grace period
+message ForcedLogoutEvent {
+  string reason = 1;
+}
+
+message AdminConflictEvent {
+  string challenger_session_id = 1;
+}
+
+message ModeChangedEvent {
+  SessionMode new_mode = 1;
+}
+
+service SessionService {
+  rpc WatchSessionEvents  (WatchSessionEventsRequest) returns (stream SessionEvent);
+  rpc GetStreamToken      (GetStreamTokenRequest)     returns (GetStreamTokenResponse);
+  rpc Heartbeat           (HeartbeatRequest)          returns (HeartbeatResponse);
+  rpc ClaimActiveRole     (ClaimActiveRoleRequest)    returns (ClaimActiveRoleResponse);
+  rpc AdminConflict       (AdminConflictRequest)      returns (AdminConflictResponse);
+}
+
+// ---------------------------------------------------------------------------
+// AdminService
+// ---------------------------------------------------------------------------
 
 message ListUsersRequest  {}
-message UserInfo {
-  string   user_id    = 1;
-  string   username   = 2;
-  UserRole role       = 3;
-  int64    created_at = 4;
-  int64    last_login = 5;
+message ListUsersResponse {
+  repeated UserEntry users = 1;
 }
-message ListUsersResponse       { repeated UserInfo users = 1; }
 
-message CreateUserRequest       { string username = 1; string password = 2; UserRole role = 3; }
-message CreateUserResponse      { UserInfo user = 1; }
+message UserEntry {
+  string   id       = 1;
+  string   username = 2;
+  UserRole role     = 3;
+}
 
-message DeleteUserRequest       { string user_id = 1; }
-message DeleteUserResponse      { bool success = 1; }
+message CreateUserRequest {
+  string   username = 1;
+  string   password = 2;
+  UserRole role     = 3;
+}
+message CreateUserResponse {
+  string id = 1;
+}
 
-message ResetPasswordRequest    { string user_id = 1; string new_password = 2; }
-message ResetPasswordResponse   { bool success = 1; }
+message DeleteUserRequest {
+  string id = 1;
+}
+message DeleteUserResponse {}
+
+message ResetPasswordRequest {
+  string id           = 1;
+  string new_password = 2;
+}
+message ResetPasswordResponse {}
 
 service AdminService {
-  rpc ListUsers(ListUsersRequest)       returns (ListUsersResponse);
-  rpc CreateUser(CreateUserRequest)     returns (CreateUserResponse);
-  rpc DeleteUser(DeleteUserRequest)     returns (DeleteUserResponse);
-  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc ListUsers      (ListUsersRequest)      returns (ListUsersResponse);
+  rpc CreateUser     (CreateUserRequest)     returns (CreateUserResponse);
+  rpc DeleteUser     (DeleteUserRequest)     returns (DeleteUserResponse);
+  rpc ResetPassword  (ResetPasswordRequest)  returns (ResetPasswordResponse);
 }
