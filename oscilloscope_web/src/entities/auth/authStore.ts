@@ -4,6 +4,7 @@ import { SessionMode, UserRole } from '@/generated/buf_connect_server_pb';
 interface SessionConflictInfo {
   startedAtUtc: string;
   role: string;
+  pendingCallToken: string;
 }
 
 interface AuthState {

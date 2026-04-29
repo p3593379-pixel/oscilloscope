@@ -83,8 +83,6 @@ namespace buf_connect_server::session {
         // Expiry loop
         std::thread       expiry_thread_;
         std::atomic<bool> expiry_running_{false};
-        uint32_t          grace_period_admin_    = 45;
-        uint32_t          grace_period_engineer_ = 90;
 
         // ------------------------------------------------------------------
         // Helpers
@@ -149,32 +147,6 @@ namespace buf_connect_server::session {
             return {};
         }
 
-        // Determine initial mode for an incoming session, under the lock.
-        SessionMode AssignMode(UserRole role, const std::string& session_id) {
-            if (role == UserRole::Admin) {
-                std::string existing_admin = FindActiveAdminSession();
-                if (existing_admin.empty()) {
-                    // No active admin — become ActiveAdmin and notify all engineers.
-                    return SessionMode::ActiveAdmin;
-                } else {
-                    // Active admin already present — fire conflict event at the incumbent.
-                    SendEvent(existing_admin, MakeAdminConflict(session_id));
-                    return SessionMode::Observer;
-                }
-            } else {
-                // Engineer
-                std::string active_admin = FindActiveAdminSession();
-                if (!active_admin.empty()) {
-                    return SessionMode::OnService;
-                }
-                std::string active_eng = FindActiveEngineerSession();
-                if (active_eng.empty()) {
-                    return SessionMode::Active;
-                }
-                return SessionMode::Observer;
-            }
-        }
-
         // When a new admin joins as ActiveAdmin, broadcast OnService to all engineers.
         void BroadcastOnServiceToEngineers() {
             auto ev = MakeModeChanged(SessionMode::OnService);
@@ -209,7 +181,6 @@ namespace buf_connect_server::session {
 
         // Erase a session from all internal maps thread safe
         void EraseSession(const SessionUuid & _session_uuid) {
-            std::lock_guard<std::mutex> lock(mutex_);
             sessions_.erase(_session_uuid);
             subscribers_.erase(_session_uuid);
             auto size_before = user_session_index_.size();
@@ -222,6 +193,39 @@ namespace buf_connect_server::session {
             if (size_before == user_session_index_.size()) {
                 SPDLOG_ERROR("Did not succeed to delete user");
             }
+        }
+
+        void RegisterSession(SessionEntry & _session_entry)
+        {
+            SessionMode mode;
+            if (_session_entry.role == UserRole::Admin) {
+                std::string existing_admin = FindActiveAdminSession();
+                if (existing_admin.empty()) {
+                    // No active admin — become ActiveAdmin and notify all engineers.
+                    BroadcastOnServiceToEngineers();
+                    mode = SessionMode::ActiveAdmin;
+                } else {
+                    // Active admin already present — fire conflict event at the incumbent.
+                    SendEvent(existing_admin, MakeAdminConflict(_session_entry.session_uuid));
+                    mode = SessionMode::Observer;
+                }
+            } else {
+                // Engineer
+                std::string active_admin = FindActiveAdminSession();
+                if (!active_admin.empty()) {
+                    mode = SessionMode::OnService;
+                }
+                std::string active_eng = FindActiveEngineerSession();
+                if (active_eng.empty()) {
+                    mode = SessionMode::Active;
+                }
+            }
+            _session_entry.mode = mode;
+            sessions_[_session_entry.session_uuid] = _session_entry;
+            subscribers_[_session_entry.session_uuid] = _session_entry.callback;
+            user_session_index_[_session_entry.user_id] = _session_entry.session_uuid;
+            auto started_ev = MakeSessionStarted(_session_entry.session_uuid, _session_entry.mode, _session_entry.role);
+            _session_entry.callback(started_ev);
         }
     };
 
@@ -236,82 +240,26 @@ namespace buf_connect_server::session {
 // Connect
 // ---------------------------------------------------------------------------
 
-    SessionEntry SessionManager::CreateSession(uint64_t user_id, const std::string & _user_role, EventCallback _callback)
+    SessionEntry SessionManager::BuildNewSession(uint64_t _user_id, const std::string & _user_role, EventCallback _event_callback)
     {
-        std::lock_guard<std::mutex> lock(impl_->mutex_);
         auto new_session_uuid = GenerateUuid();
         SessionEntry entry;
-        // ------------------------------------------------------------------
-        // 1.  Check whether this session_uuid was invalidated by a TakeOver.
-        // ------------------------------------------------------------------
-        if (impl_->invalidated_sessions_.count(new_session_uuid)) {
-            spdlog::warn("session_manager: CreateSession rejected — session '{}' is invalidated "
-                         "(taken over)", new_session_uuid);
-            // Send the forced-logout event so the client can react, then refuse.
-            auto ev = Impl::MakeForcedLogout("taken_over");
-            _callback(ev);
-            entry.session_uuid = "";
-            entry.mode = SessionMode::Unspecified;
-            entry.role = UserRole::Unspecified;
-            entry.user_id = 0;
-            return entry; // stream should be closed by the caller
-        }
-
-        // ------------------------------------------------------------------
-        // 2.  Build the session entry.
-        // ------------------------------------------------------------------
         auto now = Clock::now();
 
         entry.session_uuid   = new_session_uuid;
-        entry.user_id        = user_id;
+        entry.user_id        = _user_id;
         entry.role           = (_user_role == "admin") ? UserRole::Admin : UserRole::Engineer;
+        entry.mode           = SessionMode::Unspecified; // Not specified without context
         entry.started_at     = now;
         entry.last_heartbeat = now;
-        entry.callback       = _callback;
-
-        // ------------------------------------------------------------------
-        // 3.  Determine mode.
-        // ------------------------------------------------------------------
-        SessionMode mode = impl_->AssignMode(entry.role, new_session_uuid);
-        entry.mode = mode;
-
-        // ------------------------------------------------------------------
-        // 4.  Register the session.
-        // ------------------------------------------------------------------
-        impl_->sessions_[new_session_uuid]    = std::move(entry);
-        impl_->subscribers_[new_session_uuid] = _callback;
-
-        // ------------------------------------------------------------------
-        // 5.  Update user_session_index_.
-        // ------------------------------------------------------------------
-        impl_->user_session_index_[user_id] = new_session_uuid;
-
-        // ------------------------------------------------------------------
-        // 6.  Side effects of mode assignment.
-        // ------------------------------------------------------------------
-        if (mode == SessionMode::ActiveAdmin) {
-            impl_->BroadcastOnServiceToEngineers();
-        }
-
-        // ------------------------------------------------------------------
-        // 7.  Send SessionStartedEvent to this session.
-        // ------------------------------------------------------------------
-        auto started_ev = Impl::MakeSessionStarted(new_session_uuid, mode, entry.role);
-        _callback(started_ev);
-
-        std::string mode_str;
-        switch (mode) {
-            case SessionMode::ActiveAdmin: { mode_str = "active_admin"; break; }
-            case SessionMode::Active: { mode_str = "active_engineer"; break; }
-            case SessionMode::Observer: { mode_str = "observer"; break; }
-            case SessionMode::OnService: { mode_str = "on_service"; break; }
-            default: mode_str = "unspecified";
-        }
-
-        spdlog::info("session_manager: CreateSession session_uuid='{}' user='{}' role={} mode={}",
-                     new_session_uuid, user_id, _user_role, mode_str);
-
+        entry.callback       = _event_callback;
         return entry;
+    }
+
+    void SessionManager::RegisterSession(SessionEntry & _session_entry)
+    {
+        std::lock_guard<std::mutex> _(impl_->mutex_);
+        impl_->RegisterSession(_session_entry);
     }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +375,7 @@ namespace buf_connect_server::session {
         auto ev = Impl::MakeForcedLogout("taken_over");
         impl_->SendEvent(old_session_uuid, ev);
         auto session = impl_->sessions_.find(old_session_uuid);
+        std::string role_str = session->second.role == UserRole::Admin ? "admin" : "engineer";
         v2::SessionMode session_mode;
         switch (session->second.mode) {
             case SessionMode::ActiveAdmin: { session_mode = v2::SessionMode::SESSION_MODE_ACTIVE_ADMIN; break; }
@@ -438,9 +387,10 @@ namespace buf_connect_server::session {
         // 2. Erase the old session from the state machine.
         impl_->EraseSession(old_session_uuid);
 
-        // 4. Mark old session_id as invalidated so any concurrent WatchSessionEvents
-        //    call for it is rejected immediately.
-//        impl_->invalidated_sessions_[old_session_id] = Clock::now();
+        // 3. Register new one, but with already known from pending list UUID
+        auto new_session_entry = BuildNewSession(_user_id, role_str, session->second.callback);
+        new_session_entry.session_uuid = _session_uuid_taking_over;
+        impl_->RegisterSession(new_session_entry);
 
         // Note: new_session_id is NOT added to invalidated_sessions_ — it is the
         // replacement and must be allowed through Connect().
@@ -454,7 +404,7 @@ namespace buf_connect_server::session {
 
     bool SessionManager::IsSessionInvalidated(const std::string& session_id) const {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
-        return impl_->invalidated_sessions_.count(session_id) > 0;
+        return impl_->sessions_.count(session_id) == 0;
     }
 
 // ---------------------------------------------------------------------------
@@ -568,16 +518,14 @@ namespace buf_connect_server::session {
                                          uint32_t grace_engineer_seconds)
     {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
-        impl_->grace_period_admin_    = grace_admin_seconds;
-        impl_->grace_period_engineer_ = grace_engineer_seconds;
 
         impl_->expiry_running_.store(true);
 
-        impl_->expiry_thread_ = std::thread([this] {
+        impl_->expiry_thread_ = std::thread([this, grace_admin_seconds, grace_engineer_seconds] {
             spdlog::info("session_manager: expiry loop started "
                          "(grace_admin={}s grace_engineer={}s)",
-                         impl_->grace_period_admin_,
-                         impl_->grace_period_engineer_);
+                         grace_admin_seconds,
+                         grace_engineer_seconds);
 
             while (impl_->expiry_running_.load()) {
                 std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -592,12 +540,18 @@ namespace buf_connect_server::session {
                     for (const auto& [session_uuid, entry] : impl_->sessions_) {
                         // Select grace period by role.
                         uint32_t grace = (entry.role == UserRole::Admin)
-                                         ? impl_->grace_period_admin_
-                                         : impl_->grace_period_engineer_;
+                                         ? grace_admin_seconds
+                                         : grace_engineer_seconds;
+
+                        std::cout << session_uuid << ":\t";
+                        auto now_c = std::chrono::system_clock::to_time_t(now);
+                        std::cout << "Now" << std::put_time(std::localtime(&now_c), "%F %T") << "\t";
+                        auto lhb = std::chrono::system_clock::to_time_t(entry.last_heartbeat);
+                        std::cout << "Last Heartbeat" << std::put_time(std::localtime(&lhb), "%F %T") << "\t";
 
                         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                                 now - entry.last_heartbeat).count();
-
+                        std::cout << "elapsed: " << elapsed << std::endl;
                         if (elapsed > static_cast<long long>(grace)) {
                             spdlog::info("session_manager: expiring session='{}' user='{}' "
                                          "elapsed={}s grace={}s",

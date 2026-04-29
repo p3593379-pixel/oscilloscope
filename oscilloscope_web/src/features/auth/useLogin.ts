@@ -29,6 +29,7 @@ export function useLogin() {
         setSessionConflict({
           startedAtUtc: response.conflictInfo?.startedAtUtc ?? '',
           role:         response.conflictInfo?.role ?? '',
+          pendingCallToken: response.callToken,
         });
         return { ok: false, conflict: true };
       }

@@ -40,7 +40,7 @@ namespace buf_connect_server {
 
         // New fields
         uint32_t heartbeat_interval_seconds     = 20;
-        uint32_t grace_period_admin_seconds     = 45;
+        uint32_t grace_period_admin_seconds     = 15;
         uint32_t grace_period_engineer_seconds  = 90;
     };
 

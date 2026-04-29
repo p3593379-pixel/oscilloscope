@@ -20,7 +20,12 @@ export function useRenewCallToken() {
 
     const renew = useCallback(async (): Promise<boolean> => {
         try {
-            const client = createClient(AuthService, makeControlTransport());
+            const currentToken = useAuthStore.getState().callToken;
+            if (!currentToken) {
+                clearAuth();
+                return false;
+            }
+            const client = createClient(AuthService, makeControlTransport(currentToken));
             const response = await client.renewCallToken({});
             console.log("renewCallToken")
             const payload = decodeJwtPayload<{ exp: number }>(response.callToken);
@@ -36,7 +41,10 @@ export function useRenewCallToken() {
 
     const scheduleRenewal = useCallback((expSec: number) => {
         cancel();
-        const delaySec = Math.max(expSec - Date.now() / 1000 - 60, 10);
+        const nowSec   = Date.now() / 1000;
+        const ttlSec   = expSec - nowSec;               // how long until expiry
+        const leadSec  = Math.max(ttlSec * 0.2, 5);     // renew at 80% of TTL, min 5s lead
+        const delaySec = Math.max(ttlSec - leadSec, 2);
         timerRef.current = setTimeout(() => renew(), delaySec * 1000);
     }, [cancel, renew]);
 

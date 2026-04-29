@@ -1,6 +1,11 @@
 import { createConnectTransport } from '@connectrpc/connect-web';
 import {CONTROL_PLANE_URL, DATA_PLANE_URL} from "@/shared/config/env.ts";
 
+// Bare fetch with cookies. Every control-plane call needs this so the browser
+// stores the Set-Cookie from Login and sends it on RenewCallToken / TakeOver.
+const fetchWithCredentials: typeof globalThis.fetch = (input, init) =>
+    globalThis.fetch(input, { ...init, credentials: 'include' });
+
 /**
  * Control-plane transport — used for AuthService, SessionService, AdminService,
  * and all device-specific RPCs that go through the nginx control plane.
@@ -10,6 +15,7 @@ export function makeControlTransport(callToken?: string) {
     return createConnectTransport({
         baseUrl: CONTROL_PLANE_URL,
         useBinaryFormat: true,
+        fetch: fetchWithCredentials,
         interceptors: callToken
             ? [(next) => (req) => {
                 req.header.set('Authorization', `Bearer ${callToken}`);

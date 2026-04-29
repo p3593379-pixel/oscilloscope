@@ -18,7 +18,7 @@ buf_connect_server::auth::AuthMiddleware::Authenticate(const std::string& author
     ConnectContext ctx;
     ctx.user_id      = claims->sub;
     ctx.role         = claims->role;
-    ctx.session_id   = claims->session_id;
+    ctx.session_id   = claims->session_uuid;
     ctx.exp          = std::chrono::duration_cast<std::chrono::seconds>(claims->expires_at - claims->issued_at).count();
     return ctx;
 }

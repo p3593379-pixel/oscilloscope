@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include <spdlog/spdlog.h>
+#include <iomanip>
 
 namespace buf_connect_server {
     namespace services {
@@ -50,56 +51,24 @@ namespace buf_connect_server {
             buf_connect_server::auth::JwtClaims claims;
             claims.sub          = user_id;
             claims.role         = role;
-            claims.session_id   = session_id;
+            claims.session_uuid   = session_id;
             claims.type         = "call_token";
             claims.issued_at          = now;
-            claims.expires_at          = now + std::chrono::seconds(auth_config_.call_token_ttl_seconds);
-            return jwt_issuer_->Issue(claims);
-        }
-
-        std::string AuthHandler::IssueSessionTicket(const std::string & user_id,
-                                                    const std::string& role,
-                                                    const std::string& session_id) const
-        {
-            auto now = std::chrono::system_clock::now();
-
-            buf_connect_server::auth::JwtClaims claims;
-            claims.sub          = user_id;
-            claims.role         = role;
-            claims.session_id   = session_id;
-            claims.type         = "session_ticket";
-            claims.issued_at          = now;
-            claims.expires_at          = now + std::chrono::seconds(auth_config_.session_ticket_ttl_seconds);
+            claims.expires_at         = now + std::chrono::seconds(auth_config_.call_token_ttl_seconds);
             return jwt_issuer_->Issue(claims);
         }
 
 // static
-        std::string AuthHandler::ExtractCookie(const connect::ParsedConnectRequest& req, const std::string& name)
+        std::string AuthHandler::ExtractAuthorizationBearer(const connect::ParsedConnectRequest& req)
         {
-            auto cookie_it = req.headers.find("cookie");
-            if (cookie_it == req.headers.end()) {
-                SPDLOG_ERROR("No \'cookie\' header in request");
+            namespace c = connect;
+
+            // Read from Authorization header instead of cookie
+            auto auth_it = req.headers.find("authorization");
+            if (auth_it == req.headers.end() || auth_it->second.rfind("Bearer ", 0) != 0) {
                 return {};
             }
-            const std::string & cookies = cookie_it->second;
-            const std::string prefix = name + "=";
-            std::istringstream ss(cookies);
-            std::string token;
-            while (std::getline(ss, token, ';')) {
-                // Trim leading whitespace
-                const auto start = token.find_first_not_of(' ');
-                if (start == std::string::npos)
-                    continue;
-                token = token.substr(start);
-                if (token.rfind(prefix, 0) == 0) {
-                    return token.substr(prefix.size());
-                }
-            }
-            return {};
-        }
-        std::string AuthHandler::BuildSessionTicketCookie(const std::string & token)
-        {
-            return {"call_token=" + token};
+            return auth_it->second.substr(7); // strip "Bearer "
         }
 
         static std::vector<uint8_t> ExtractUnaryBody(const connect::ParsedConnectRequest& req)
@@ -136,43 +105,65 @@ namespace buf_connect_server {
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid credentials");
                 return;
             }
-            user_store_.UpdateLastLogin(user->id);
 
             const auto user_id = std::stoull(user->id);
             const auto role= user->role;
 
-//            TODO: WHAT IS THAT CALLBACK!!
-            // 2. Create a new session (may surface a conflict)
-            auto new_session_entry = mgr_.CreateSession(user_id, role, [](const v2::SessionEvent & _event) { return true; });
-
             // TODO: CONFLICT LOGIC
-            /*if (result.conflict) {
-                // Conflict path: issue a session_ticket so the client can call TakeOver.
-                // The cookie carries the new (pending) session_id.
-                const std::string new_session_id = result.new_session_id;
-                const std::string session_mode   = result.session_mode;
+            if (mgr_.HasLiveSession(user_id)) {
+                const auto live = mgr_.GetLiveSessionInfo(user_id);
 
-                const std::string ticket = IssueSessionTicket(user_id, role, session_mode, new_session_id);
+                // CreateSession() detects user_session_index_ is occupied and stores the
+                // new entry only in sessions_ (pending / Observer), not in user_session_index_.
+                // TakeOver() will activate it when the user confirms the takeover.
+                auto pending = session::SessionManager::BuildNewSession(
+                        user_id, role,
+                        [](const v2::SessionEvent &)
+                        { return true; }); // placeholder — SessionHandler wires real cb
 
                 {
                     std::lock_guard<std::mutex> lock(pending_mutex_);
-                    pending_logins_[new_session_id] = PendingLogin{user_id, new_session_id, role};
+                    pending_logins_[pending.session_uuid] = PendingLogin{user->id, pending.session_uuid, role};
                 }
 
-                // TODO: adapt response writing to match the existing handler pattern
-                resp.SetStatus(200);
-                resp.SetHeader("Set-Cookie", BuildSessionTicketCookie(ticket));
-                resp.WriteBody("{\"session_conflict\":true"
-                               ",\"conflict_info\":{"
-                               "\"started_at_utc\":\"" + result.conflict_started_at + "\""
-                                                                                      ",\"role\":\"" + result.conflict_role + "\""
-                                                                                                                              "}}");
+                // Ticket carries the *pending* session_uuid so TakeOver can look it up.
+                const std::string pending_call_token = IssueCallToken(user->id, role, pending.session_uuid);
+
+                // Convert steady_clock → ISO-8601 UTC string
+                const auto diff         = session::Clock::now() - live.started_at;
+                const auto started_sys  = std::chrono::time_point_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now() - diff);
+                const std::time_t tt    = std::chrono::system_clock::to_time_t(started_sys);
+                std::tm tm_utc{};
+                gmtime_r(&tt, &tm_utc);
+                std::ostringstream oss;
+                oss << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%SZ");
+
+                auto* ci = new v2::SessionConflictInfo();
+                ci->set_started_at_utc(oss.str());
+                ci->set_role(live.role);
+
+                v2::LoginResponse resp;
+                resp.set_call_token(pending_call_token);
+                resp.set_session_conflict(true);
+                resp.set_allocated_conflict_info(ci);  // call_token absent — client must TakeOver first
+                std::vector<uint8_t> out(resp.ByteSizeLong());
+                resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
+
+                writer.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto, std::span<const uint8_t>(out));
                 return;
-            }*/
+            }
+
+            user_store_.UpdateLastLogin(user->id);
+
+            // 2. Normal path: Create a new session
+            auto new_session_entry = session::SessionManager::BuildNewSession(user_id, role,
+                                                                              [](const v2::SessionEvent &_event)
+                                                                              { return true; });
+            mgr_.RegisterSession(new_session_entry);
 
             // 3. Normal path: issue call_token + session_ticket
             const std::string call_token     = IssueCallToken(user->id, role, new_session_entry.session_uuid);
-            const std::string session_ticket = IssueSessionTicket(user->id, role, new_session_entry.session_uuid);
 
             // TODO: adapt response writing to match the existing handler pattern
             v2::LoginResponse resp;
@@ -185,8 +176,19 @@ namespace buf_connect_server {
             std::vector<uint8_t> out(resp.ByteSizeLong());
             resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
 
-            writer.AddHeader("set-cookie", BuildSessionTicketCookie(session_ticket));
             writer.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,std::span<const uint8_t>(out));
+
+            std::string mode_str;
+            switch (new_session_entry.mode) {
+                case session::SessionMode::ActiveAdmin: { mode_str = "active_admin"; break; }
+                case session::SessionMode::Active: { mode_str = "active_engineer"; break; }
+                case session::SessionMode::Observer: { mode_str = "observer"; break; }
+                case session::SessionMode::OnService: { mode_str = "on_service"; break; }
+                default: mode_str = "unspecified";
+            }
+
+            SPDLOG_INFO("session_manager: CreateSession session_uuid='{}' user='{}' role={} mode={}",
+                         new_session_entry.session_uuid, new_session_entry.user_id, role, mode_str);
         }
 
 // ---------------------------------------------------------------------------
@@ -195,42 +197,42 @@ namespace buf_connect_server {
 
         void AuthHandler::HandleRenewCallToken(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& writer) {
             namespace c = connect;
-            const std::string raw_ticket = ExtractCookie(req, "session_ticket");
+            const std::string raw_ticket = ExtractAuthorizationBearer(req);
             if (raw_ticket.empty()) {
                 writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-                writer.WriteError(std::string(c::kCodeUnauthenticated), "missing session ticket cookie");
+                writer.WriteError(std::string(c::kCodeUnauthenticated), "missing call token");
                 return;
             }
 
             auto claims = jwt_issuer_->Verify(raw_ticket);
-            if (!claims || claims->type != "session_ticket") {
+            if (!claims || claims->type != "call_token") {
                 writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-                writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid session ticket");
+                writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid call token");
                 return;
             }
 
             const std::string user_id      = claims->sub;
             const std::string role         = claims->role;
-            const std::string session_id   = claims->session_id;
+            const std::string session_uuid   = claims->session_uuid;
+            SPDLOG_INFO("Renewing token for session {}", session_uuid);
 
-            if (mgr_.IsSessionInvalidated(session_id)) {
+            if (mgr_.IsSessionInvalidated(session_uuid)) {
+                SPDLOG_INFO("Unable to renew: Session {} is invalidated", session_uuid);
                 writer.SendHeaders(c::kHttpUnauthorized, "application/json");
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "session invalidated");
                 return;
             }
 
             // Issue new call_token, rotate session_ticket
-            std::string call_token     = IssueCallToken(user_id, role, session_id);
-            std::string session_ticket = IssueSessionTicket(user_id, role, session_id);
+            std::string call_token     = IssueCallToken(user_id, role, session_uuid);
 
-            mgr_.Touch(session_id);
+            mgr_.Touch(session_uuid);
 
             v2::RenewCallTokenResponse resp;
             resp.set_call_token(call_token);
             std::vector<uint8_t> out(resp.ByteSizeLong());
             resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
 
-            writer.AddHeader("set-cookie", BuildSessionTicketCookie(session_ticket));
             writer.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
                                      std::span<const uint8_t>(out));
         }
@@ -242,30 +244,34 @@ namespace buf_connect_server {
         void AuthHandler::HandleTakeOver(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& writer)
         {
             namespace c = connect;
-            const std::string raw_ticket = ExtractCookie(req, "session_ticket");
-            if (raw_ticket.empty()) {
-                writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-                writer.WriteError(std::string(c::kCodeUnauthenticated), "missing session ticket cookie");
+            // 1. Parse request body
+            auto body = ExtractUnaryBody(req);
+            v2::TakeOverRequest takeover_req;
+            if (!takeover_req.ParseFromArray(body.data(), static_cast<int>(body.size()))
+                || takeover_req.call_token().empty()) {
+                writer.SendHeaders(c::kHttpBadRequest, "application/json");
+                writer.WriteError(std::string(c::kCodeInvalidArgument), "missing call_token");
                 return;
             }
 
-            auto claims = jwt_issuer_->Verify(raw_ticket);
-            if (!claims || claims->type != "session_ticket") {
+            // 2. Verify JWT — signature proves server issued it, claims give us the uuid
+            auto claims = jwt_issuer_->Verify(takeover_req.call_token());
+            if (!claims || claims->type != "call_token") {
                 writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-                writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid session ticket");
+                writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid call token");
                 return;
             }
-
             const std::string user_id      = claims->sub;
             const std::string role         = claims->role;
-            const std::string new_session_id = claims->session_id;
+            const std::string new_session_uuid = claims->session_uuid;
+            SPDLOG_INFO("Session {} is attempting a takeover", new_session_uuid);
 
             v2::SessionMode session_mode;
 
             // Verify this session is in the pending-conflict map
             {
                 std::lock_guard<std::mutex> lock(pending_mutex_);
-                const auto it = pending_logins_.find(new_session_id);
+                const auto it = pending_logins_.find(new_session_uuid);
                 if (it == pending_logins_.end()) {
                     writer.SendHeaders(c::kHttpConflict, "application/json");
                     writer.WriteError(std::string(c::kCodeUnauthenticated), "no pending takeover for this session");
@@ -274,8 +280,7 @@ namespace buf_connect_server {
                 pending_logins_.erase(it);
             }
             // Inheriting session mode from the taken over session
-            session_mode = mgr_.TakeOver(std::stoull(user_id), new_session_id);
-            // Evict the incumbent session and activate the new one
+            session_mode = mgr_.TakeOver(std::stoull(user_id), new_session_uuid);
             if (session_mode == v2::SessionMode::SESSION_MODE_UNSPECIFIED) {
                 writer.SendHeaders(c::kHttpInternalError, "application/json");
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "takeover failed");
@@ -283,18 +288,16 @@ namespace buf_connect_server {
             }
 
             // Issue fresh call_token + session_ticket for the new session
-            std::string call_token     = IssueCallToken(user_id, role, new_session_id);
-            std::string session_ticket = IssueSessionTicket(user_id, role, new_session_id);
+            std::string call_token     = IssueCallToken(user_id, role, new_session_uuid);
 
             v2::TakeOverResponse resp;
             v2::UserRole v2_role = (role == "admin") ? v2::USER_ROLE_ADMIN : v2::USER_ROLE_ENGINEER;
             resp.set_role(v2_role);
             resp.set_call_token(call_token);
-            resp.set_session_id(new_session_id);
+            resp.set_session_id(new_session_uuid);
             resp.set_session_mode(session_mode);
             std::vector<uint8_t> out(resp.ByteSizeLong());
             resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
-            writer.AddHeader("set-cookie", BuildSessionTicketCookie(session_ticket));
             writer.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,std::span<const uint8_t>(out));
         }
 

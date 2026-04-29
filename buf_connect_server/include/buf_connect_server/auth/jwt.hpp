@@ -51,7 +51,7 @@ namespace buf_connect_server::auth {
         std::string role;
 
         /// "session_id" — UUID of the session this token belongs to.
-        std::string session_id;
+        std::string session_uuid;
 
         /// "typ" — token class; must be kTokenTypeCallToken or kTokenTypeSessionTicket.
         std::string type;

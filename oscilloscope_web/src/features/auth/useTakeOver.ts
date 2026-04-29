@@ -16,10 +16,18 @@ export function useTakeOver() {
     const takeOver = useCallback(async (): Promise<boolean> => {
         setLoading(true);
         setError(null);
+
+        const pendingCallToken = useAuthStore.getState().sessionConflict?.pendingCallToken;
+        if (!pendingCallToken) {
+            setError('No pending session token — please log in again');
+            setLoading(false);
+            return false;
+        }
+
         try {
             // The session_ticket cookie set during Login (even on conflict) is sent automatically
             const client   = createClient(AuthService, makeControlTransport());
-            const response = await client.takeOver({});
+            const response = await client.takeOver({ callToken: pendingCallToken });
 
             const payload = decodeJwtPayload<{ exp: number }>(response.callToken);
             setAuth({

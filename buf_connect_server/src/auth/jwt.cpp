@@ -11,14 +11,14 @@ buf_connect_server::auth::JwtIssuer::JwtIssuer(std::string secret)
 
 std::string buf_connect_server::auth::JwtIssuer::Issue(const JwtClaims &claims) const
 {
-    SPDLOG_INFO("Token issued. Role: {}; Type: {};", claims.role, claims.type);
+//    SPDLOG_INFO("Token issued. UUID: {}; Role: {}; Type: {};", claims.session_uuid, claims.role, claims.type);
     return jwt::create()
             .set_issuer(kIssuer)
             .set_subject(claims.sub)
             .set_issued_at(claims.issued_at)
             .set_expires_at(claims.expires_at)
             .set_payload_claim("role",         jwt::claim(claims.role))
-            .set_payload_claim("session_id", jwt::claim(claims.session_id))
+            .set_payload_claim("session_uuid", jwt::claim(claims.session_uuid))
             .set_payload_claim("type",         jwt::claim(claims.type))
             .sign(jwt::algorithm::hs256{secret_});
 }
@@ -31,7 +31,7 @@ buf_connect_server::auth::JwtIssuer::Verify(const std::string &token) const
     try {
         auto verifier = jwt::verify()
                 .allow_algorithm(jwt::algorithm::hs256{secret_})
-                .leeway(std::chrono::seconds(0).count());
+                .leeway(std::chrono::seconds(5).count());
 
         auto decoded = jwt::decode(token);
         verifier.verify(decoded);
@@ -39,11 +39,11 @@ buf_connect_server::auth::JwtIssuer::Verify(const std::string &token) const
         JwtClaims c;
         c.sub          = decoded.get_subject();
         c.role         = decoded.get_payload_claim("role").as_string();
-        c.session_id   = decoded.get_payload_claim("session_id").as_string();
+        c.session_uuid   = decoded.get_payload_claim("session_uuid").as_string();
         c.type         = decoded.get_payload_claim("type").as_string();
         c.issued_at    = decoded.get_issued_at();
         c.expires_at   = decoded.get_expires_at();
-        SPDLOG_INFO("Token validated. Role: {}; Type: {};", c.role, c.type);
+//        SPDLOG_INFO("Token validated. UUID: {}; Role: {}; Type: {};", c.session_uuid, c.role, c.type);
         return c;
     } catch (...) {
         return std::nullopt;

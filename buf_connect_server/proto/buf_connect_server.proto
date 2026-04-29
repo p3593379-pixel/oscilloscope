@@ -67,7 +67,9 @@ message RenewCallTokenResponse {
 // TakeOver — forcibly displaces an existing live session for the same user.
 // Requires a valid session_ticket cookie (issued by the conflicting Login call).
 // The old session receives a ForcedLogoutEvent with reason "taken_over".
-message TakeOverRequest  {}
+message TakeOverRequest  {
+  string      call_token   = 1;
+}
 message TakeOverResponse {
   string      call_token   = 1;
   UserRole    role         = 2;

@@ -38,7 +38,7 @@ namespace buf_connect_server::session {
     v2::SessionMode to_v2_session_mode(const SessionMode & _);
     v2::UserRole to_v2_user_role(const UserRole & _);
 
-    using Clock     = std::chrono::steady_clock;
+    using Clock     = std::chrono::system_clock;
     using TimePoint = Clock::time_point;
 // ---------------------------------------------------------------------------
 // EventCallback
@@ -72,7 +72,7 @@ namespace buf_connect_server::session {
         std::string role;
 
         /// When the session was established (steady_clock, for grace-period math).
-        std::chrono::steady_clock::time_point started_at;
+        TimePoint started_at;
     };
 
 
@@ -102,7 +102,8 @@ namespace buf_connect_server::session {
         /// On success: adds entry to user_session_index_[user_id] = connection_id.
         /// If session_id is in invalidated_sessions_: sends ForcedLogoutEvent and
         /// returns SessionMode::Observer (the caller should close the stream).
-        SessionEntry CreateSession(uint64_t user_id, const std::string & _user_role, EventCallback _callback);
+        static SessionEntry BuildNewSession(uint64_t _user_id, const std::string & _user_role, EventCallback _event_callback);
+        void RegisterSession(SessionEntry & _session_entry);
 
         /// Disconnect a session.  Removes it from all internal maps.
         /// If user_session_index_[user_id] == connection_id, removes that entry too.

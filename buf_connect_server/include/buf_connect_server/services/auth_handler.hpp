@@ -57,7 +57,7 @@ namespace buf_connect_server {
             static std::string BuildSessionTicketCookie(const std::string& token) ;
 
             // Extracts a cookie value by name from a raw Cookie header string.
-            static std::string ExtractCookie(const connect::ParsedConnectRequest& req, const std::string& name);
+            static std::string ExtractAuthorizationBearer(const connect::ParsedConnectRequest& req);
 
             auth::UserStore&         user_store_;
             const AuthConfig&        auth_config_;
