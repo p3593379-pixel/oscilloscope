@@ -1,0 +1,15 @@
+.overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.selRect {
+    position: absolute;
+    border: 1px solid rgba(255, 255, 255, 0.70);
+    background: rgba(255, 255, 255, 0.07);
+    pointer-events: none;
+    box-sizing: border-box;
+}

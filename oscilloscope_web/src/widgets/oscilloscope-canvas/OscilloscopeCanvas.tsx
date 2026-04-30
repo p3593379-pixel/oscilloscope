@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { useDataStream }              from '@/features/data-stream/useDataStream';
 import { useSettingsStore }           from '@/entities/oscilloscopeSettings/settingsStore';
 import styles                         from './OscilloscopeCanvas.module.css';
@@ -9,9 +9,7 @@ interface Props {
 }
 
 export function OscilloscopeCanvas({ workerRef }: Props) {
-  const canvasRef = typeof document !== 'undefined'
-      ? require('react').useRef<HTMLCanvasElement>()
-      : { current: null };
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const {
     xStart, xShow, yPeakToPeak,
