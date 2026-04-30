@@ -16,6 +16,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <random>
+#include <iomanip>
 
 static std::atomic<bool>    g_shutdown{false};
 static std::mutex           g_shutdown_mutex;
@@ -45,22 +47,29 @@ public:
 
     std::vector<std::shared_ptr<ServiceHandlerBase>> services_;
 
-    explicit Impl(ServerConfig cfg)
-            : config_(std::move(cfg)),
-              user_store_(config_.user_db_path) {
-        jwt_issuer_       = std::make_shared<auth::JwtIssuer>(config_.auth.jwt_secret);
+    explicit Impl(ServerConfig cfg) : config_(std::move(cfg)), user_store_(config_.user_db_path)
+    {
+        std::mt19937_64 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+        std::uniform_int_distribution<uint64_t> dist;
+        std::ostringstream oss;
+        auto v1 = dist(rng), v2 = dist(rng);
+        oss << std::hex << std::setfill('0')
+            << std::setw(8) << (v1 >> 32) << "-"
+            << std::setw(4) << ((v1 >> 16) & 0xFFFF) << "-"
+            << std::setw(4) << (v1 & 0xFFFF) << "-"
+            << std::setw(4) << (v2 >> 48) << "-"
+            << std::setw(12) << (v2 & 0xFFFFFFFFFFFFull);
+        auto jwt_secret = oss.str();
+        jwt_issuer_       = std::make_shared<auth::JwtIssuer>(jwt_secret);
         auth_middleware_ = std::make_shared<auth::AuthMiddleware>(jwt_issuer_);
         session_manager_.StartExpiryLoop(config_.session.grace_period_admin_seconds,
                                          config_.session.grace_period_engineer_seconds);
 
         control_plane_ = std::make_unique<transport::ControlPlane>(config_.control_plane);
 
-        // Data plane only if not single-interface mode
-        if (!config_.single_interface_mode) {
-            data_plane_ = std::make_unique<transport::DataPlane>(config_.data_plane);
-        }
+        data_plane_ = std::make_unique<transport::DataPlane>(config_.data_plane);
 
-        config_server_ = std::make_unique<ConfigServer>(&config_, &user_store_, "./static/control_panel");
+        config_server_ = std::make_unique<ConfigServer>(&config_, &user_store_, "./static/control_panel_web");
     }
 };
 
@@ -110,7 +119,7 @@ buf_connect_server::BufConnectServer::GetConfig() const {
     return impl_->config_;
 }
 
-void buf_connect_server::BufConnectServer::Start()
+void buf_connect_server::BufConnectServer::Start(const std::string & _jwt_secret)
 {
     std::signal(SIGTERM, SignalHandler);
     std::signal(SIGINT,  SignalHandler);
@@ -123,7 +132,7 @@ void buf_connect_server::BufConnectServer::Start()
 
     // Auto-register built-in handlers — auth / session / admin
     auto auth_h    = std::make_shared<services::AuthHandler>(
-            impl_->user_store_, impl_->config_.auth, impl_->session_manager_);
+            impl_->user_store_, _jwt_secret, impl_->config_.session, impl_->session_manager_);
 //    auto session_h = std::make_shared<services::SessionHandler>(
 //            impl_->session_manager_, impl_->config_.auth);
 //    auto admin_h   = std::make_shared<services::AdminHandler>(
@@ -139,7 +148,7 @@ void buf_connect_server::BufConnectServer::Start()
         impl_->data_plane_->Start();
     }
 
-    if (cfg.single_interface_mode) {
+    if (!cfg.data_plane.enabled) {
         spdlog::warn("Single-interface mode: data streaming shares control plane bandwidth");
     }
 

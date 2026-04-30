@@ -16,7 +16,7 @@ buf_connect_server::auth::AuthMiddleware::Authenticate(const std::string& author
     if (claims->type != "call_token") return std::nullopt;  // FIXED: was "access"
 
     ConnectContext ctx;
-    ctx.user_id      = claims->sub;
+    ctx.user_id      = claims->user_uuid;
     ctx.role         = claims->role;
     ctx.session_id   = claims->session_uuid;
     ctx.exp          = std::chrono::duration_cast<std::chrono::seconds>(claims->expires_at - claims->issued_at).count();

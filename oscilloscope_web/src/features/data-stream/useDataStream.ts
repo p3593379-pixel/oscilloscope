@@ -9,7 +9,6 @@ import {
 import { useAuthStore }              from '@/entities/auth/authStore';
 import { useWaveformStore }          from '@/entities/waveform/waveformStore';
 
-/** Splits interleaved float32 bytes into per-channel Float32Array views. */
 function deinterleave(raw: Uint8Array, numChannels: number): Float32Array[] {
   const totalFloats    = raw.byteLength / 4;
   const samplesPerChan = Math.floor(totalFloats / numChannels);
@@ -34,8 +33,6 @@ export function useDataStream(workerRef: RefObject<Worker | null>) {
     abortRef.current = abort;
 
     const run = async () => {
-      // streamToken is fetched by useSession before this hook runs;
-      // if it's absent the data plane would reject anyway, so bail early.
       const { streamToken } = useAuthStore.getState();
       if (!streamToken) return;
 
@@ -46,13 +43,7 @@ export function useDataStream(workerRef: RefObject<Worker | null>) {
       waveform.setStreaming(true);
       try {
         for await (const chunk of client.streamData(
-            {
-              // Option A: tier is negotiated on the data plane after token validation.
-              // We still send a preference here; the server may honour or override it.
-              requestedTier:    DecimationTier.FULL,
-              maxBandwidthMbps: 0,
-              streamToken,
-            },
+            { requestedTier: DecimationTier.FULL, maxBandwidthMbps: 0, streamToken },
             { signal: abort.signal }
         )) {
           const numChannels = chunk.channels;
@@ -60,20 +51,20 @@ export function useDataStream(workerRef: RefObject<Worker | null>) {
           if (numChannels === 0 || raw.byteLength === 0) continue;
 
           const perChannel = deinterleave(raw, numChannels);
+
+          // Track total samples (use ch0 as reference)
+          waveform.addSamples(perChannel[0].length);
+          if (chunk.sampleRateHz) waveform.setSampleRate(chunk.sampleRateHz);
+          if (numChannels !== waveform.channelCount) waveform.setChannelCount(numChannels);
+
           for (let ch = 0; ch < perChannel.length; ch++) {
             const buf = perChannel[ch].buffer.slice(
                 perChannel[ch].byteOffset,
                 perChannel[ch].byteOffset + perChannel[ch].byteLength
             );
             workerRef.current?.postMessage(
-                {
-                  type:        'samples',
-                  channel:     ch,
-                  sampleRate:  chunk.sampleRateHz,
-                  sequence:    chunk.sequenceNumber,
-                  timestampNs: chunk.timestampNs,
-                  data:        buf,
-                },
+                { type: 'samples', channel: ch, sampleRate: chunk.sampleRateHz,
+                  sequence: chunk.sequenceNumber, timestampNs: chunk.timestampNs, data: buf },
                 [buf]
             );
           }

@@ -1,84 +1,68 @@
 // FILE: control_panel_web/src/features/streaming/StreamingSettingsPanel.tsx
 import { useEffect, useState } from 'react';
 import { configClient, type StreamingConfig } from 'api/configClient';
-import { PanelLayout, SaveButton, Field, Select } from '../_shared/PanelComponents';
 
-const FRAME_SIZES = [8192, 32768, 65536, 262144];
-const ALGORITHMS  = ['zstd', 'gzip'];
-const POLICIES    = [
-    { value: 'drop_oldest',        label: 'Drop oldest'        },
-    { value: 'block',              label: 'Block producer'     },
-    { value: 'disconnect',         label: 'Disconnect client'  },
-];
+const ALGORITHMS = ['zstd', 'lz4', 'snappy', 'gzip'];
 
-const defaults: StreamingConfig = {
-    max_clients: 0,
-    frame_size_bytes: 65536,
-    compression_enabled: false,
-    compression_algorithm: 'zstd',
-    compression_threshold_bytes: 1024,
-    backpressure_policy: 'disconnect',
+const input: React.CSSProperties = {
+    background: '#313244', border: '1px solid #45475a', color: '#cdd6f4',
+    borderRadius: 4, padding: '4px 8px', fontSize: 14,
 };
 
 export default function StreamingSettingsPanel() {
-    const [cfg, setCfg]       = useState<StreamingConfig>(defaults);
+    const [cfg, setCfg]       = useState<StreamingConfig | null>(null);
     const [saving, setSaving] = useState(false);
-    const [msg, setMsg]       = useState('');
+    const [message, setMsg]   = useState('');
 
-    useEffect(() => {
-        configClient.getStreaming().then(r => { if (r.data) setCfg(r.data); });
-    }, []);
+    useEffect(() => { configClient.getStreaming().then(r => r.data && setCfg(r.data)); }, []);
+    if (!cfg) return <p style={{ color: '#a6adc8' }}>Loading…</p>;
 
     const save = async () => {
-        setSaving(true);
+        setSaving(true); setMsg('');
         const r = await configClient.putStreaming(cfg);
-        setMsg(r.error ? `Error: ${r.error}` : 'Saved');
         setSaving(false);
-        setTimeout(() => setMsg(''), 3000);
+        setMsg(r.error ? `Error: ${r.error}` : 'Saved.');
     };
 
     return (
-        <PanelLayout title="Streaming Settings">
-            <Field label="Max Streaming Clients (0 = unlimited)">
-                <input type="number" min={0} value={cfg.max_clients}
-                       onChange={e => setCfg(p => ({ ...p, max_clients: +e.target.value }))}
-                       style={inputStyle} />
-            </Field>
-            <Field label="Frame Size">
-                <Select value={String(cfg.frame_size_bytes)}
-                        onChange={v => setCfg(p => ({ ...p, frame_size_bytes: +v }))}
-                        options={FRAME_SIZES.map(s => ({ value: String(s), label: `${s / 1024} KiB` }))} />
-            </Field>
-            <Field label="Compression">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#cdd6f4' }}>
-                    <input type="checkbox" checked={cfg.compression_enabled}
-                           onChange={e => setCfg(p => ({ ...p, compression_enabled: e.target.checked }))} />
-                    Enable compression
+        <div style={{ maxWidth: 480 }}>
+            <h2 style={{ marginBottom: 6, color: '#89b4fa' }}>Streaming</h2>
+            <p style={{ fontSize: 13, color: '#6c7086', marginBottom: 24 }}>
+                Data-plane compression settings. More options (frame size, backpressure, TLS) will be added in a future release.
+            </p>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                <input type="checkbox" checked={cfg.compression_enabled}
+                       onChange={e => setCfg({ ...cfg, compression_enabled: e.target.checked })} />
+                <span style={{ fontSize: 14 }}>Enable compression</span>
+            </label>
+
+            {cfg.compression_enabled && (
+                <label style={{ display: 'block', marginBottom: 16 }}>
+                    <span style={{ display: 'block', marginBottom: 4, fontSize: 14 }}>Algorithm</span>
+                    <select value={cfg.compression_algorithm}
+                            onChange={e => setCfg({ ...cfg, compression_algorithm: e.target.value })}
+                            style={{ ...input, width: 160 }}>
+                        {ALGORITHMS.map(a => <option key={a}>{a}</option>)}
+                    </select>
                 </label>
-            </Field>
-            {cfg.compression_enabled && <>
-                <Field label="Algorithm">
-                    <Select value={cfg.compression_algorithm}
-                            onChange={v => setCfg(p => ({ ...p, compression_algorithm: v }))}
-                            options={ALGORITHMS.map(a => ({ value: a, label: a }))} />
-                </Field>
-                <Field label="Threshold (bytes)">
-                    <input type="number" min={0} value={cfg.compression_threshold_bytes}
-                           onChange={e => setCfg(p => ({ ...p, compression_threshold_bytes: +e.target.value }))}
-                           style={inputStyle} />
-                </Field>
-            </>}
-            <Field label="Backpressure Policy">
-                <Select value={cfg.backpressure_policy}
-                        onChange={v => setCfg(p => ({ ...p, backpressure_policy: v }))}
-                        options={POLICIES} />
-            </Field>
-            <SaveButton onClick={save} saving={saving} msg={msg} />
-        </PanelLayout>
+            )}
+
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <button onClick={save} disabled={saving} style={saveBtn}>
+                    {saving ? 'Saving…' : 'Save'}
+                </button>
+                {message && (
+                    <span style={{ fontSize: 13, color: message.startsWith('Error') ? '#f38ba8' : '#a6e3a1' }}>
+                        {message}
+                    </span>
+                )}
+            </div>
+        </div>
     );
 }
 
-const inputStyle: React.CSSProperties = {
-    background: '#313244', border: '1px solid #45475a', color: '#cdd6f4',
-    padding: '0.4rem 0.6rem', borderRadius: 4, width: '100%', boxSizing: 'border-box',
+const saveBtn: React.CSSProperties = {
+    background: '#89b4fa', color: '#1e1e2e', border: 'none',
+    padding: '6px 20px', borderRadius: 4, cursor: 'pointer', fontSize: 14, fontWeight: 600,
 };

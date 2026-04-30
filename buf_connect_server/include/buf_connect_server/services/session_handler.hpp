@@ -15,14 +15,13 @@ namespace buf_connect_server::services {
 // Registered automatically by BufConnectServer::Start().
     class SessionHandler final : public ServiceHandlerBase {
     public:
-        SessionHandler(session::SessionManager& mgr, const AuthConfig& auth_config);
+        SessionHandler(session::SessionManager& mgr);
 
         std::string ServicePath() const override;
         void RegisterRoutes(BufConnectServer& server) override;
 
     private:
         session::SessionManager&                mgr_;
-        AuthConfig                              auth_config_;
         std::shared_ptr<auth::StreamToken>      stream_token_;
         std::shared_ptr<auth::AuthMiddleware>   auth_middleware_;
 

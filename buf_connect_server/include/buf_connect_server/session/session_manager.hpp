@@ -34,6 +34,7 @@ namespace buf_connect_server::session {
     };
 
     using SessionUuid = std::string;
+    using UserUuid    = std::string;
 
     v2::SessionMode to_v2_session_mode(const SessionMode & _);
     v2::UserRole to_v2_user_role(const UserRole & _);
@@ -49,8 +50,8 @@ namespace buf_connect_server::session {
     using EventCallback = std::function<bool(const buf_connect_server::v2::SessionEvent&)>;
 
     struct SessionEntry {
-        std::string  session_uuid;
-        uint64_t  user_id {0};
+        SessionUuid  session_uuid;
+        UserUuid     user_id;
         UserRole     role          = UserRole::Unspecified;
         SessionMode  mode          = SessionMode::Unspecified;
         TimePoint    started_at;
@@ -66,7 +67,7 @@ namespace buf_connect_server::session {
 
     struct LiveSessionInfo {
         /// session_uuid assigned to the session when it entered SessionManager.
-        std::string session_uuid;
+        SessionUuid session_uuid;
 
         /// Role of the session owner ("engineer" or "admin").
         std::string role;
@@ -102,7 +103,7 @@ namespace buf_connect_server::session {
         /// On success: adds entry to user_session_index_[user_id] = connection_id.
         /// If session_id is in invalidated_sessions_: sends ForcedLogoutEvent and
         /// returns SessionMode::Observer (the caller should close the stream).
-        static SessionEntry BuildNewSession(uint64_t _user_id, const std::string & _user_role, EventCallback _event_callback);
+        static SessionEntry BuildNewSession(const UserUuid &_user_uuid, const std::string & _user_role, EventCallback _event_callback);
         void RegisterSession(SessionEntry & _session_entry);
 
         /// Disconnect a session.  Removes it from all internal maps.
@@ -111,7 +112,7 @@ namespace buf_connect_server::session {
                         uint64_t user_id);
 
         /// Update the last-heartbeat timestamp for the given session.
-        void UpdateHeartbeat(const std::string& session_id);
+        void UpdateHeartbeat(const SessionUuid &_session_uuid);
 
         // -----------------------------------------------------------------------
         // Session invalidation / takeover
@@ -119,11 +120,11 @@ namespace buf_connect_server::session {
 
         /// Returns true if `user_id` has a live session registered in
         /// user_session_index_.
-        bool HasLiveSession(uint64_t user_id) const;
+        bool HasLiveSession(const UserUuid &_user_uuid) const;
 
         /// Returns the LiveSessionInfo for the user's active session.
         /// Precondition: HasLiveSession(user_id) == true.
-        LiveSessionInfo GetLiveSessionInfo(uint64_t user_id) const;
+        LiveSessionInfo GetLiveSessionInfo(const UserUuid &_user_uuid) const;
 
         /// Force-displace the existing session for `user_id`.
         ///
@@ -138,16 +139,16 @@ namespace buf_connect_server::session {
         /// `new_session_id` is the session_id that will replace the old one;
         /// it is stored here so that, when the new WatchSessionEvents arrives,
         /// CreateSession() can recognise it is NOT invalidated.
-        v2::SessionMode TakeOver(uint64_t _user_id,
-                      const SessionUuid &_session_uuid_taking_over);
+        v2::SessionMode TakeOver(const UserUuid &_user_uuid,
+                                 const SessionUuid &_session_uuid_taking_over);
 
         /// Returns true if `session_id` has been evicted via TakeOver and any
         /// attempt to use it should be rejected.
-        bool IsSessionInvalidated(const std::string& session_id) const;
+        bool IsSessionInvalidated(const SessionUuid &_session_uuid) const;
 
         /// Alias for UpdateHeartbeat — public, used by HandleRenewCallToken as the
         /// control-plane heartbeat signal.
-        void Touch(const std::string& session_id);
+        void Touch(const SessionUuid &_session_uuid);
 
         // -----------------------------------------------------------------------
         // Role claims and admin conflict

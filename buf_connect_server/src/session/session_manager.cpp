@@ -71,10 +71,10 @@ namespace buf_connect_server::session {
         // so Broadcast doesn't need to iterate all sessions to find active ones).
         std::unordered_map<SessionUuid, EventCallback> subscribers_;
 
-        // user_id → session_uuid for the currently-live session per user.
+        // user_uuid → session_uuid for the currently-live session per user.
         // A "live" session is one that has passed through Connect() and is still
         // active (has not been Disconnect()ed or TakeOver()n).
-        std::unordered_map<uint64_t , SessionUuid> user_session_index_;
+        std::unordered_map<UserUuid, SessionUuid> user_session_index_;
 
         // session_uuids that have been force-displaced by TakeOver.
         // Any WatchSessionEvents call presenting one of these must be rejected.
@@ -240,14 +240,14 @@ namespace buf_connect_server::session {
 // Connect
 // ---------------------------------------------------------------------------
 
-    SessionEntry SessionManager::BuildNewSession(uint64_t _user_id, const std::string & _user_role, EventCallback _event_callback)
+    SessionEntry SessionManager::BuildNewSession(const UserUuid & _user_uuid, const std::string & _user_role, EventCallback _event_callback)
     {
         auto new_session_uuid = GenerateUuid();
         SessionEntry entry;
         auto now = Clock::now();
 
         entry.session_uuid   = new_session_uuid;
-        entry.user_id        = _user_id;
+        entry.user_id        = _user_uuid;
         entry.role           = (_user_role == "admin") ? UserRole::Admin : UserRole::Engineer;
         entry.mode           = SessionMode::Unspecified; // Not specified without context
         entry.started_at     = now;
@@ -263,79 +263,43 @@ namespace buf_connect_server::session {
     }
 
 // ---------------------------------------------------------------------------
-// Disconnect
-// ---------------------------------------------------------------------------
-
-    void SessionManager::Disconnect(const std::string& session_uuid, uint64_t user_id) {
-        std::lock_guard<std::mutex> lock(impl_->mutex_);
-
-        auto it = impl_->sessions_.find(session_uuid);
-        if (it == impl_->sessions_.end()) {
-            spdlog::debug("session_manager: Disconnect called for unknown session '{}'", session_uuid);
-            return;
-        }
-
-        auto mode = it->second.mode;
-        std::string role_str = it->second.role == UserRole::Admin ? "admin " : "engineer";
-        impl_->EraseSession(session_uuid);
-
-        // Update user_session_index_ only if this connection_id is still the
-        // registered one (a TakeOver may have already replaced it).
-        {
-            auto idx_it = impl_->user_session_index_.find(user_id);
-            if (idx_it != impl_->user_session_index_.end() &&
-                idx_it->second == session_uuid) {
-                impl_->user_session_index_.erase(idx_it);
-            }
-        }
-
-        spdlog::info("session_manager: Disconnect session='{}' user='{}' role='{}' mode={}",
-                     session_uuid, user_id, role_str, static_cast<int>(mode));
-
-        // If the departing session was the active admin, restore engineers.
-        if (mode == SessionMode::ActiveAdmin) {
-            impl_->RestoreEngineersOnAdminLeave();
-        }
-    }
-
-// ---------------------------------------------------------------------------
 // UpdateHeartbeat / Touch
 // ---------------------------------------------------------------------------
 
-    void SessionManager::UpdateHeartbeat(const std::string& session_id) {
+    void SessionManager::UpdateHeartbeat(const SessionUuid & _session_uuid) {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
-        auto it = impl_->sessions_.find(session_id);
+        auto it = impl_->sessions_.find(_session_uuid);
         if (it != impl_->sessions_.end()) {
             it->second.last_heartbeat = Clock::now();
         }
     }
 
-    void SessionManager::Touch(const std::string& session_id) {
-        UpdateHeartbeat(session_id);
+    void SessionManager::Touch(const SessionUuid &_session_uuid) {
+        UpdateHeartbeat(_session_uuid);
     }
 
 // ---------------------------------------------------------------------------
 // HasLiveSession
 // ---------------------------------------------------------------------------
 
-    bool SessionManager::HasLiveSession(uint64_t user_id) const
+    bool SessionManager::HasLiveSession(const UserUuid &_user_uuid) const
     {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
-        return impl_->user_session_index_.count(user_id) > 0;
+        return impl_->user_session_index_.count(_user_uuid) > 0;
     }
 
 // ---------------------------------------------------------------------------
 // GetLiveSessionInfo
 // ---------------------------------------------------------------------------
 
-    LiveSessionInfo SessionManager::GetLiveSessionInfo(uint64_t user_id) const
+    LiveSessionInfo SessionManager::GetLiveSessionInfo(const UserUuid &_user_uuid) const
     {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
 
-        auto idx_it = impl_->user_session_index_.find(user_id);
+        auto idx_it = impl_->user_session_index_.find(_user_uuid);
         if (idx_it == impl_->user_session_index_.end()) {
             spdlog::error("session_manager: GetLiveSessionInfo called for user '{}' "
-                          "who has no live session", user_id);
+                          "who has no live session", _user_uuid);
             return {};
         }
 
@@ -344,7 +308,7 @@ namespace buf_connect_server::session {
         auto entry = impl_->sessions_.find(session_uuid);
         if (entry == impl_->sessions_.end()) { // Should not happen if user_session_index_ is kept consistent.
             SPDLOG_ERROR("session_manager: GetLiveSessionInfo found index entry for user '{}' "
-                          "but no matching session", user_id);
+                          "but no matching session", _user_uuid);
             return {};
         }
 
@@ -359,13 +323,13 @@ namespace buf_connect_server::session {
 // TakeOver
 // ---------------------------------------------------------------------------
 
-    v2::SessionMode SessionManager::TakeOver(uint64_t _user_id, const SessionUuid & _session_uuid_taking_over)
+    v2::SessionMode SessionManager::TakeOver(const UserUuid &_user_uuid, const SessionUuid & _session_uuid_taking_over)
     {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
 
-        auto idx_it = impl_->user_session_index_.find(_user_id);
+        auto idx_it = impl_->user_session_index_.find(_user_uuid);
         if (idx_it == impl_->user_session_index_.end()) {
-            spdlog::warn("session_manager: TakeOver — no live session for user '{}'", _user_id);
+            spdlog::warn("session_manager: TakeOver — no live session for user '{}'", _user_uuid);
             return v2::SessionMode::SESSION_MODE_UNSPECIFIED;
         }
 
@@ -388,7 +352,7 @@ namespace buf_connect_server::session {
         impl_->EraseSession(old_session_uuid);
 
         // 3. Register new one, but with already known from pending list UUID
-        auto new_session_entry = BuildNewSession(_user_id, role_str, session->second.callback);
+        auto new_session_entry = BuildNewSession(_user_uuid, role_str, session->second.callback);
         new_session_entry.session_uuid = _session_uuid_taking_over;
         impl_->RegisterSession(new_session_entry);
 
@@ -402,9 +366,9 @@ namespace buf_connect_server::session {
 // IsSessionInvalidated
 // ---------------------------------------------------------------------------
 
-    bool SessionManager::IsSessionInvalidated(const std::string& session_id) const {
+    bool SessionManager::IsSessionInvalidated(const SessionUuid & _session_uuid) const {
         std::lock_guard<std::mutex> lock(impl_->mutex_);
-        return impl_->sessions_.count(session_id) == 0;
+        return impl_->sessions_.count(_session_uuid) == 0;
     }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +495,7 @@ namespace buf_connect_server::session {
                 std::this_thread::sleep_for(std::chrono::seconds(5));
                 if (!impl_->expiry_running_.load()) break;
 
-                std::vector<std::pair<SessionUuid , uint64_t >> to_evict; // {session_id, user_id}
+                std::vector<std::pair<SessionUuid , UserUuid >> to_evict; // {session_id, user_id}
 
                 {
                     std::lock_guard<std::mutex> lock(impl_->mutex_);

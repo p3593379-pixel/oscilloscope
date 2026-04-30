@@ -8,12 +8,11 @@
 
 class ArchiveServiceImpl : public buf_connect_server::ServiceHandlerBase {
 public:
-    explicit ArchiveServiceImpl(const buf_connect_server::AuthConfig& auth_config);
+    explicit ArchiveServiceImpl(const std::string & _jwt_secret);
     std::string ServicePath() const override;
     void RegisterRoutes(buf_connect_server::BufConnectServer& server) override;
 
 private:
-    buf_connect_server::AuthConfig                auth_config_;
     std::shared_ptr<buf_connect_server::auth::StreamToken> stream_token_;
 
     void HandleRequestDownload(

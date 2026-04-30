@@ -14,7 +14,7 @@ std::string buf_connect_server::auth::JwtIssuer::Issue(const JwtClaims &claims) 
 //    SPDLOG_INFO("Token issued. UUID: {}; Role: {}; Type: {};", claims.session_uuid, claims.role, claims.type);
     return jwt::create()
             .set_issuer(kIssuer)
-            .set_subject(claims.sub)
+            .set_subject(claims.user_uuid)
             .set_issued_at(claims.issued_at)
             .set_expires_at(claims.expires_at)
             .set_payload_claim("role",         jwt::claim(claims.role))
@@ -37,7 +37,7 @@ buf_connect_server::auth::JwtIssuer::Verify(const std::string &token) const
         verifier.verify(decoded);
 
         JwtClaims c;
-        c.sub          = decoded.get_subject();
+        c.user_uuid          = decoded.get_subject();
         c.role         = decoded.get_payload_claim("role").as_string();
         c.session_uuid   = decoded.get_payload_claim("session_uuid").as_string();
         c.type         = decoded.get_payload_claim("type").as_string();

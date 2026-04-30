@@ -1,10 +1,9 @@
 // FILE: control_panel_web/src/components/Sidebar.tsx
-import type { PanelId } from '../App';
+import { type TabId }  from '../App.tsx';
 
-const navItems: { id: PanelId; label: string; icon: string }[] = [
+const navItems: { id: TabId; label: string; icon: string }[] = [
     { id: 'status',    label: 'Status',    icon: '📊' },
     { id: 'network',   label: 'Network',   icon: '🌐' },
-    { id: 'auth',      label: 'Auth',      icon: '🔑' },
     { id: 'streaming', label: 'Streaming', icon: '📡' },
     { id: 'session',   label: 'Session',   icon: '🔗' },
     { id: 'log',       label: 'Logging',   icon: '📋' },
@@ -13,8 +12,8 @@ const navItems: { id: PanelId; label: string; icon: string }[] = [
 ];
 
 interface Props {
-    active: PanelId;
-    onNavigate: (id: PanelId) => void;
+    active: TabId;
+    onNavigate: (id: TabId) => void;
 }
 
 export default function Sidebar({ active, onNavigate }: Props) {

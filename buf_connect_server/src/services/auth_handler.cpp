@@ -16,12 +16,13 @@ namespace buf_connect_server {
 // ---------------------------------------------------------------------------
 
         AuthHandler::AuthHandler(auth::UserStore&         user_store,
-                                 const AuthConfig&        auth_config,
+                                 const std::string & _jwt_secret,
+                                 const SessionConfig & _session_config,
                                  session::SessionManager& mgr)
                 : user_store_(user_store),
-                  auth_config_(auth_config),
                   mgr_(mgr),
-                  jwt_issuer_(std::make_shared<auth::JwtIssuer>(auth_config.jwt_secret)) {}
+                  kSessionConfig(_session_config),
+                  jwt_issuer_(std::make_shared<auth::JwtIssuer>(_jwt_secret)) {}
 
         void AuthHandler::RegisterRoutes(BufConnectServer& server) {
             server.RegisterControlRoute(
@@ -43,18 +44,18 @@ namespace buf_connect_server {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-        std::string AuthHandler::IssueCallToken(const std::string& user_id,
-                                                const std::string& role,
-                                                const std::string& session_id) const
+        std::string AuthHandler::IssueCallToken(const session::UserUuid &_user_uuid,
+                                                const std::string& _role,
+                                                const session::SessionUuid &_session_uuid) const
         {
             auto now = std::chrono::system_clock::now();
             buf_connect_server::auth::JwtClaims claims;
-            claims.sub          = user_id;
-            claims.role         = role;
-            claims.session_uuid   = session_id;
+            claims.user_uuid          = _user_uuid;
+            claims.role         = _role;
+            claims.session_uuid   = _session_uuid;
             claims.type         = "call_token";
             claims.issued_at          = now;
-            claims.expires_at         = now + std::chrono::seconds(auth_config_.call_token_ttl_seconds);
+            claims.expires_at         = now + std::chrono::seconds(kSessionConfig.call_token_renew_period);
             return jwt_issuer_->Issue(claims);
         }
 
@@ -100,34 +101,31 @@ namespace buf_connect_server {
             }
             // 1. Authenticate credentials
             auto user = user_store_.FindByUsername(login_req.username());
-            if (!user || !user_store_.VerifyPassword(user->id, login_req.password())) {
+            if (!user || !user_store_.VerifyPassword(user->uuid, login_req.password())) {
                 writer.SendHeaders(c::kHttpUnauthorized, "application/json");
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid credentials");
                 return;
             }
 
-            const auto user_id = std::stoull(user->id);
-            const auto role= user->role;
-
             // TODO: CONFLICT LOGIC
-            if (mgr_.HasLiveSession(user_id)) {
-                const auto live = mgr_.GetLiveSessionInfo(user_id);
+            if (mgr_.HasLiveSession(user->uuid)) {
+                const auto live = mgr_.GetLiveSessionInfo(user->uuid);
 
                 // CreateSession() detects user_session_index_ is occupied and stores the
                 // new entry only in sessions_ (pending / Observer), not in user_session_index_.
                 // TakeOver() will activate it when the user confirms the takeover.
                 auto pending = session::SessionManager::BuildNewSession(
-                        user_id, role,
+                        user->uuid, user->role,
                         [](const v2::SessionEvent &)
                         { return true; }); // placeholder — SessionHandler wires real cb
 
                 {
                     std::lock_guard<std::mutex> lock(pending_mutex_);
-                    pending_logins_[pending.session_uuid] = PendingLogin{user->id, pending.session_uuid, role};
+                    pending_logins_[pending.session_uuid] = PendingLogin{user->uuid, pending.session_uuid, user->role};
                 }
 
                 // Ticket carries the *pending* session_uuid so TakeOver can look it up.
-                const std::string pending_call_token = IssueCallToken(user->id, role, pending.session_uuid);
+                const std::string pending_call_token = IssueCallToken(user->uuid, user->role, pending.session_uuid);
 
                 // Convert steady_clock → ISO-8601 UTC string
                 const auto diff         = session::Clock::now() - live.started_at;
@@ -154,16 +152,16 @@ namespace buf_connect_server {
                 return;
             }
 
-            user_store_.UpdateLastLogin(user->id);
+            user_store_.UpdateLastLogin(user->uuid);
 
             // 2. Normal path: Create a new session
-            auto new_session_entry = session::SessionManager::BuildNewSession(user_id, role,
+            auto new_session_entry = session::SessionManager::BuildNewSession(user->uuid, user->role,
                                                                               [](const v2::SessionEvent &_event)
                                                                               { return true; });
             mgr_.RegisterSession(new_session_entry);
 
             // 3. Normal path: issue call_token + session_ticket
-            const std::string call_token     = IssueCallToken(user->id, role, new_session_entry.session_uuid);
+            const std::string call_token     = IssueCallToken(user->uuid, user->role, new_session_entry.session_uuid);
 
             // TODO: adapt response writing to match the existing handler pattern
             v2::LoginResponse resp;
@@ -188,7 +186,7 @@ namespace buf_connect_server {
             }
 
             SPDLOG_INFO("session_manager: CreateSession session_uuid='{}' user='{}' role={} mode={}",
-                         new_session_entry.session_uuid, new_session_entry.user_id, role, mode_str);
+                         new_session_entry.session_uuid, new_session_entry.user_id, user->role, mode_str);
         }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +209,7 @@ namespace buf_connect_server {
                 return;
             }
 
-            const std::string user_id      = claims->sub;
+            const std::string user_id      = claims->user_uuid;
             const std::string role         = claims->role;
             const std::string session_uuid   = claims->session_uuid;
             SPDLOG_INFO("Renewing token for session {}", session_uuid);
@@ -261,8 +259,8 @@ namespace buf_connect_server {
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid call token");
                 return;
             }
-            const std::string user_id      = claims->sub;
-            const std::string role         = claims->role;
+            const std::string user_uuid        = claims->user_uuid;
+            const std::string user_role        = claims->role;
             const std::string new_session_uuid = claims->session_uuid;
             SPDLOG_INFO("Session {} is attempting a takeover", new_session_uuid);
 
@@ -280,7 +278,7 @@ namespace buf_connect_server {
                 pending_logins_.erase(it);
             }
             // Inheriting session mode from the taken over session
-            session_mode = mgr_.TakeOver(std::stoull(user_id), new_session_uuid);
+            session_mode = mgr_.TakeOver(user_uuid, new_session_uuid);
             if (session_mode == v2::SessionMode::SESSION_MODE_UNSPECIFIED) {
                 writer.SendHeaders(c::kHttpInternalError, "application/json");
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "takeover failed");
@@ -288,10 +286,10 @@ namespace buf_connect_server {
             }
 
             // Issue fresh call_token + session_ticket for the new session
-            std::string call_token     = IssueCallToken(user_id, role, new_session_uuid);
+            std::string call_token     = IssueCallToken(user_uuid, user_role, new_session_uuid);
 
             v2::TakeOverResponse resp;
-            v2::UserRole v2_role = (role == "admin") ? v2::USER_ROLE_ADMIN : v2::USER_ROLE_ENGINEER;
+            v2::UserRole v2_role = (user_role == "admin") ? v2::USER_ROLE_ADMIN : v2::USER_ROLE_ENGINEER;
             resp.set_role(v2_role);
             resp.set_call_token(call_token);
             resp.set_session_id(new_session_uuid);

@@ -1,0 +1,108 @@
+.bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;
+    background: #ffffff;
+    padding: 0 8px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #e0e0e0;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.chBtn {
+    height: 22px;
+    min-width: 30px;
+    padding: 0 6px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-family: monospace;
+    font-size: 10px;
+    font-weight: 600;
+    transition: background 120ms, border-color 120ms;
+}
+.ch0Active  { background: #87cefa; border-color: #5ca9d9; color: #1a3a4a; }
+.ch1Active  { background: #f08080; border-color: #d66060; color: #4a1a1a; }
+.chInactive { background: #e0e0e0; border-color: #c0c0c0; color: #666; }
+.chBtn:hover { filter: brightness(0.94); }
+
+.sep {
+    width: 1px;
+    height: 18px;
+    background: #d0d0d0;
+    flex-shrink: 0;
+    margin: 0 2px;
+}
+
+.toolBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 22px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #444;
+    cursor: pointer;
+    transition: background 120ms;
+    flex-shrink: 0;
+}
+.toolBtn:hover { background: #f0f0f0; }
+.toolActive {
+    background: #e8e8e8;
+    border-color: #bbb;
+    color: #111;
+}
+
+.label {
+    color: #555;
+    font-size: 11px;
+    margin-left: 2px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.segmented {
+    display: flex;
+    height: 22px;
+    border: 1px solid #c0c0c0;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #e0e0e0;
+    flex-shrink: 0;
+}
+.segBtn {
+    flex: 1;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    color: #3b3b3b;
+    font-family: monospace;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 120ms, color 120ms;
+}
+.segBtn + .segBtn { border-left: 1px solid #c4c4c4; }
+.segActive { background: #c4c4c4; color: #fff; }
+.segBtn:hover:not(.segActive) { background: #d8d8d8; }
+
+.spacer { flex: 1; }
+
+.coordLabel {
+    color: #606060;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.coordValue {
+    display: inline-block;
+    min-width: 60px;
+    text-align: right;
+    font-size: 11px;
+    color: #222;
+    font-family: monospace;
+    flex-shrink: 0;
+}

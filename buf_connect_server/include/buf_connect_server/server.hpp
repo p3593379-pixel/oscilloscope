@@ -44,7 +44,7 @@ namespace buf_connect_server {
         const ServerConfig& GetConfig() const;
 
         // Blocks until SIGTERM/SIGINT
-        void Start();
+        void Start(const std::string & _jwt_secret);
         void Stop();
 
     private:

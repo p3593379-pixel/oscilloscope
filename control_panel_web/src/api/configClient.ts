@@ -1,97 +1,101 @@
 // FILE: control_panel_web/src/api/configClient.ts
 
+// ---- Types aligned with canonical server_config.hpp ----
+
 export interface TlsConfig {
-    enabled: boolean;
-    cert_path: string;
-    key_path: string;
+    enabled:     boolean;
+    cert_path:   string;
+    key_path:    string;
     min_version: string;
 }
 
 export interface InterfaceConfig {
     bind_address: string;
-    port: number;
-    enabled: boolean;
-    tls: TlsConfig;
+    port:         number;
+    enabled:      boolean;
+    tls:          TlsConfig;
 }
 
 export interface NetworkConfig {
     control_plane: InterfaceConfig;
-    data_plane: InterfaceConfig;
-    single_interface_mode: boolean;
+    data_plane:    InterfaceConfig;
 }
 
 export interface NetworkSaveResponse extends NetworkConfig {
     restart_required?: boolean;
 }
 
-export interface AuthConfig {
-    access_token_ttl_seconds: number;
-    refresh_token_ttl_seconds: number;
-    stream_token_ttl_seconds: number;
-    // jwt_secret intentionally omitted — never returned by API
-}
-
+/** Matches SessionConfig in server_config.hpp */
 export interface SessionConfig {
     admin_conflict_timeout_seconds: number;
-    snooze_duration_seconds: number;
-    max_concurrent_sessions: number;
+    snooze_duration_seconds:        number;
+    max_concurrent_sessions:        number;
+    call_token_renew_period:        number;
+    grace_period_admin_seconds:     number;
+    grace_period_engineer_seconds:  number;
 }
 
+/** Matches StreamingConfig — simplified, future fields TBD */
 export interface StreamingConfig {
-    max_clients: number;
-    frame_size_bytes: number;
-    compression_enabled: boolean;
+    compression_enabled:   boolean;
     compression_algorithm: string;
-    compression_threshold_bytes: number;
-    backpressure_policy: string;
 }
 
+/** Matches LogConfig in server_config.hpp */
 export interface LogConfig {
-    level: string;
-    destination: string;
-    file_path: string;
-    max_size_mb: number;
-    max_files: number;
-    access_log: boolean;
+    level:                string;
+    log_file_name_prefix: string;
+    console:              boolean;
+    max_size_mb:          number;
+    max_files:            number;
 }
 
+/** Matches MetricsConfig in server_config.hpp */
 export interface MetricsConfig {
-    enabled: boolean;
-    path: string;
+    enabled:                 boolean;
+    metrics_log_path:        string;
+    metrics_log_file_prefix: string;
+}
+
+/** Live runtime counters returned by /api/metrics/live */
+export interface LiveMetrics {
+    uptime_seconds:  number;
+    active_sessions: number;
+    total_sessions:  number;
+    peak_sessions:   number;
+    bytes_streamed:  number;
+    active_streams:  number;
+    rps:             number;
 }
 
 export type UserRole = 'admin' | 'engineer';
 
 export interface UserInfo {
-    user_id: number;
-    username: string;
-    role: UserRole;
-    created_at: number;   // unix seconds
-    last_login: number;   // unix seconds, 0 = never
+    user_id:    number;
+    username:   string;
+    role:       UserRole;
+    created_at: number;
+    last_login: number;
 }
 
 export interface CreateUserRequest {
     username: string;
     password: string;
-    role: UserRole;
+    role:     UserRole;
 }
 
-export interface ResetPasswordRequest {
-    username: string;
-    new_password: string;
-}
-
+/** Full config — no auth, no single_interface_mode */
 export interface ServerConfig {
     control_plane: InterfaceConfig;
-    data_plane: InterfaceConfig;
-    single_interface_mode: boolean;
-    auth: AuthConfig;
-    session: SessionConfig;
-    streaming: StreamingConfig;
-    log: LogConfig;
-    metrics: MetricsConfig;
-    users: UserInfo[];
+    data_plane:    InterfaceConfig;
+    session:       SessionConfig;
+    streaming:     StreamingConfig;
+    log:           LogConfig;
+    metrics:       MetricsConfig;
+    user_db_path:  string;
 }
+
+// ---- HTTP helpers ----
 
 type ApiResult<T> = Promise<{ data: T | null; error: string | null }>;
 
@@ -100,12 +104,10 @@ async function get<T>(path: string): ApiResult<T> {
         const res = await fetch(path);
         if (!res.ok) return { data: null, error: `HTTP ${res.status}` };
         return { data: (await res.json()) as T, error: null };
-    } catch (e) {
-        return { data: null, error: String(e) };
-    }
+    } catch (e) { return { data: null, error: String(e) }; }
 }
 
-async function put<T>(path: string, body: T): ApiResult<T> {
+async function put<T>(path: string, body: unknown): ApiResult<T> {
     try {
         const res = await fetch(path, {
             method: 'PUT',
@@ -114,9 +116,7 @@ async function put<T>(path: string, body: T): ApiResult<T> {
         });
         if (!res.ok) return { data: null, error: `HTTP ${res.status}` };
         return { data: (await res.json()) as T, error: null };
-    } catch (e) {
-        return { data: null, error: String(e) };
-    }
+    } catch (e) { return { data: null, error: String(e) }; }
 }
 
 async function post<T>(path: string, body: unknown): ApiResult<T> {
@@ -127,94 +127,84 @@ async function post<T>(path: string, body: unknown): ApiResult<T> {
             body: JSON.stringify(body),
         });
         if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+            const err = await res.json().catch(() => ({}));
             return { data: null, error: (err as { error?: string }).error ?? `HTTP ${res.status}` };
         }
         return { data: (await res.json()) as T, error: null };
-    } catch (e) {
-        return { data: null, error: String(e) };
-    }
+    } catch (e) { return { data: null, error: String(e) }; }
 }
 
 async function del<T>(path: string): ApiResult<T> {
     try {
         const res = await fetch(path, { method: 'DELETE' });
         if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+            const err = await res.json().catch(() => ({}));
             return { data: null, error: (err as { error?: string }).error ?? `HTTP ${res.status}` };
         }
         if (res.status === 204) return { data: null, error: null };
         return { data: (await res.json()) as T, error: null };
-    } catch (e) {
-        return { data: null, error: String(e) };
-    }
+    } catch (e) { return { data: null, error: String(e) }; }
 }
 
+// ---- Client ----
+
 export const configClient = {
-    getAll:      ()                     => get<ServerConfig>('/api/config'),
-    putAll:      (c: ServerConfig)      => put<ServerConfig>('/api/config', c),
-    getNetwork:  ()                     => get<NetworkConfig>('/api/config/network'),
-    putNetwork: (c: NetworkConfig)      => put<NetworkSaveResponse>('/api/config/network', c),
-    getAuth:     ()                     => get<AuthConfig>('/api/config/auth'),
-    putAuth:     (c: AuthConfig)        => put<AuthConfig>('/api/config/auth', c),
-    getStreaming:()                     => get<StreamingConfig>('/api/config/streaming'),
-    putStreaming: (c: StreamingConfig)  => put<StreamingConfig>('/api/config/streaming', c),
-    getSession:  ()                     => get<SessionConfig>('/api/config/session'),
-    putSession:  (c: SessionConfig)     => put<SessionConfig>('/api/config/session', c),
-    getLog:      ()                     => get<LogConfig>('/api/config/log'),
-    putLog:      (c: LogConfig)         => put<LogConfig>('/api/config/log', c),
-    getMetrics:  ()                     => get<MetricsConfig>('/api/config/metrics'),
-    putMetrics:  (c: MetricsConfig)     => put<MetricsConfig>('/api/config/metrics', c),
-    listUsers:     ()                             => get<{ users: UserInfo[] }>('/api/users'),
-    createUser:    (c: CreateUserRequest)       => post<UserInfo>('/api/users', c),
-    deleteUser:    (userId: string)               => del<{ success: boolean }>(`/api/users/${userId}`),
+    // Full config
+    getAll:  ()                  => get<ServerConfig>('/api/config'),
+    putAll:  (c: ServerConfig)   => put<ServerConfig>('/api/config', c),
 
-    resetPassword: async (c: ResetPasswordRequest) => {
-        let r = await get<{ users: UserInfo[] }>('/api/users');
-        let userId = -1;
-        for (let i = 0; i < (r.data?.users.length ?? 0); i++) {
-            if (r.data?.users[i].username == c.username)
-                userId = r.data?.users[i].user_id;
-        }
-        let success = false;
-        return put<{ success: boolean }>(`/api/users/${userId}/password`, {success})
-    },
+    // Network
+    getNetwork:  ()                      => get<NetworkConfig>('/api/config/network'),
+    putNetwork:  (c: NetworkConfig)      => put<NetworkSaveResponse>('/api/config/network', c),
 
-    setJwtSecret: (secret: string) =>
-        fetch('/api/config/auth/jwt-secret', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jwt_secret: secret }),
-        }),
+    // Session
+    getSession:  ()                      => get<SessionConfig>('/api/config/session'),
+    putSession:  (c: SessionConfig)      => put<SessionConfig>('/api/config/session', c),
 
-    exportConfig: async (): Promise<void> => {
-        const res = await fetch('/api/config/export', { method: 'POST' });
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
+    // Streaming
+    getStreaming: ()                     => get<StreamingConfig>('/api/config/streaming'),
+    putStreaming: (c: StreamingConfig)   => put<StreamingConfig>('/api/config/streaming', c),
+
+    // Log
+    getLog:  ()                          => get<LogConfig>('/api/config/log'),
+    putLog:  (c: LogConfig)              => put<LogConfig>('/api/config/log', c),
+
+    // Metrics config
+    getMetrics:  ()                      => get<MetricsConfig>('/api/config/metrics'),
+    putMetrics:  (c: MetricsConfig)      => put<MetricsConfig>('/api/config/metrics', c),
+
+    // Live metrics  (read-only)
+    getLiveMetrics: ()                   => get<LiveMetrics>('/api/metrics/live'),
+
+    // Network interfaces for IP picker
+    listNetworkInterfaces: ()            => get<{ name: string; address: string; status: string }[]>(
+        '/api/status/interfaces'),
+
+    // Users
+    listUsers:     ()                              => get<{ users: UserInfo[] }>('/api/users'),
+    createUser:    (c: CreateUserRequest)          => post<UserInfo>('/api/users', c),
+    deleteUser:    (userId: string)                => del<{ success: boolean }>(`/api/users/${userId}`),
+    resetPassword: (userId: string, pwd: string)   =>
+        put<{ success: boolean }>(`/api/users/${userId}/password`, { new_password: pwd }),
+
+    // Import / export
+    exportConfig: async () => {
+        const { data } = await get<ServerConfig>('/api/config');
+        if (!data) return;
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const a    = document.createElement('a');
+        a.href     = URL.createObjectURL(blob);
         a.download = 'config.json';
         a.click();
-        URL.revokeObjectURL(url);
     },
 
-    importConfig: async (file: File): ApiResult<{ valid: boolean }> => {
+    importConfig: async (file: File): Promise<{ error: string | null }> => {
         const text = await file.text();
         try {
-            const res = await fetch('/api/config/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: text,
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-                return { data: null, error: (err as { error: string }).error };
-            }
-            return { data: await res.json() as { valid: boolean }, error: null };
-        } catch (e) {
-            return { data: null, error: String(e) };
+            const { error } = await post<{ valid: boolean }>('/api/config/import', JSON.parse(text));
+            return { error };
+        } catch {
+            return { error: 'Invalid JSON' };
         }
     },
-
-    restart: () => fetch('/api/restart', { method: 'POST' }),
 };

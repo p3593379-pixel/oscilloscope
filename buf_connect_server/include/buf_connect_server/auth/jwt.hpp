@@ -42,7 +42,7 @@ namespace buf_connect_server::auth {
 
     struct JwtClaims {
         /// "sub" — user ID (UUID string).
-        std::string sub;
+        std::string user_uuid;
 
         /// "username" — human-readable username.
         std::string username;

@@ -10,7 +10,7 @@
 namespace buf_connect_server::auth {
 
     struct UserRecord {
-        std::string id;
+        std::string uuid;
         std::string username;
         std::string password_hash;
         std::string role;  // "admin" | "engineer"

@@ -1,32 +1,25 @@
 // FILE: control_panel_web/src/App.tsx
 import { useState } from 'react';
-import NetworkSettingsPanel  from './features/network/NetworkSettingsPanel';
-import AuthSettingsPanel     from './features/auth/AuthSettingsPanel';
+import NetworkSettingsPanel   from './features/network/NetworkSettingsPanel';
 import StreamingSettingsPanel from './features/streaming/StreamingSettingsPanel';
-import SessionSettingsPanel  from './features/session/SessionSettingsPanel';
-import LogSettingsPanel      from './features/log/LogSettingsPanel';
-import MetricsSettingsPanel  from './features/metrics/MetricsSettingsPanel';
-import UserManagementPanel   from './features/users/UserManagementPanel';
-import { StatusPanel }           from './features/status/StatusPanel';
-import { configClient }      from './api/configClient';
+import SessionSettingsPanel   from './features/session/SessionSettingsPanel';
+import LogSettingsPanel       from './features/log/LogSettingsPanel';
+import MetricsSettingsPanel   from './features/metrics/MetricsSettingsPanel';
+import UserManagementPanel    from './features/users/UserManagementPanel';
+import { StatusPanel }        from './features/status/StatusPanel';
+import { configClient }       from './api/configClient';
 
 const TABS = [
+    { id: 'status',    label: 'Status'    },
     { id: 'network',   label: 'Network'   },
-    { id: 'auth',      label: 'Auth'      },
-    { id: 'streaming', label: 'Streaming' },
     { id: 'session',   label: 'Session'   },
+    { id: 'streaming', label: 'Streaming' },
     { id: 'log',       label: 'Logging'   },
     { id: 'metrics',   label: 'Metrics'   },
     { id: 'users',     label: 'Users'     },
-    { id: 'status',    label: 'Status'    },
 ] as const;
 
-// In App.tsx — add this export near the top
-export type PanelId =
-    | 'status' | 'network' | 'auth' | 'streaming'
-    | 'session' | 'log' | 'metrics' | 'users';
-
-type TabId = typeof TABS[number]['id'];
+export type TabId = typeof TABS[number]['id'];
 
 export default function App() {
     const [tab, setTab] = useState<TabId>('status');
@@ -39,45 +32,45 @@ export default function App() {
                 display: 'flex', flexDirection: 'column', padding: '1rem 0',
             }}>
                 <div style={{ padding: '0 1rem 1.5rem', fontWeight: 700, fontSize: 15, color: '#89b4fa' }}>
-                    Oscilloscope
+                    buf_connect
                 </div>
                 {TABS.map(t => (
                     <button key={t.id} onClick={() => setTab(t.id)} style={{
                         background: tab === t.id ? '#313244' : 'transparent',
                         color: tab === t.id ? '#cdd6f4' : '#a6adc8',
-                        border: 'none', textAlign: 'left', padding: '0.6rem 1rem',
+                        border: 'none', borderLeft: tab === t.id ? '2px solid #89b4fa' : '2px solid transparent',
+                        textAlign: 'left', padding: '0.6rem 1rem',
                         cursor: 'pointer', fontSize: 14,
                     }}>{t.label}</button>
                 ))}
                 <div style={{ flex: 1 }} />
                 <div style={{ padding: '0 1rem', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <button onClick={() => configClient.exportConfig()} style={actionBtn}>
-                        Export Config
+                        ↓ Export Config
                     </button>
                     <label style={{ ...actionBtn, textAlign: 'center', cursor: 'pointer' }}>
-                        Import Config
+                        ↑ Import Config
                         <input type="file" accept=".json" style={{ display: 'none' }}
                                onChange={async e => {
                                    const file = e.target.files?.[0];
                                    if (!file) return;
                                    const result = await configClient.importConfig(file);
                                    if (result.error) alert('Import error: ' + result.error);
-                                   else alert('Config valid — apply via Save buttons');
+                                   else alert('Config valid — apply via Save buttons in each tab');
                                }} />
                     </label>
                 </div>
             </nav>
 
             {/* Main */}
-            <main style={{ flex: 1, overflow: 'auto', background: '#1a1a2e', padding: '2rem' }}>
+            <main style={{ flex: 1, overflow: 'auto', background: '#1a1a2e', padding: '2rem', color: '#cdd6f4' }}>
+                {tab === 'status'    && <StatusPanel />}
                 {tab === 'network'   && <NetworkSettingsPanel />}
-                {tab === 'auth'      && <AuthSettingsPanel />}
-                {tab === 'streaming' && <StreamingSettingsPanel />}
                 {tab === 'session'   && <SessionSettingsPanel />}
+                {tab === 'streaming' && <StreamingSettingsPanel />}
                 {tab === 'log'       && <LogSettingsPanel />}
                 {tab === 'metrics'   && <MetricsSettingsPanel />}
                 {tab === 'users'     && <UserManagementPanel />}
-                {tab === 'status'    && <StatusPanel />}
             </main>
         </div>
     );

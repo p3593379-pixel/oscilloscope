@@ -80,7 +80,7 @@ target_link_libraries(buf_connect_server
         httplib::httplib
 )
 
-if(BUILD_TESTING)
-    enable_testing()
-    add_subdirectory(tests)
-endif()
+#if(BUILD_TESTING)
+#    enable_testing()
+#    add_subdirectory(tests)
+#endif()

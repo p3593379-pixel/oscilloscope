@@ -1,40 +1,59 @@
-import { useEffect, useRef }      from 'react';
-import { useDataStream }           from '@/features/data-stream/useDataStream';
-import { useSettingsStore }        from '@/entities/oscilloscopeSettings/settingsStore';
+import { useEffect, type RefObject } from 'react';
+import { useDataStream }              from '@/features/data-stream/useDataStream';
+import { useSettingsStore }           from '@/entities/oscilloscopeSettings/settingsStore';
+import styles                         from './OscilloscopeCanvas.module.css';
 
-export function OscilloscopeCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const workerRef = useRef<Worker | null>(null);
+interface Props {
+  /** Owned by OscWidget; passed here so the parent can also postMessage. */
+  workerRef: RefObject<Worker | null>;
+}
 
-  const { voltsPerDiv, verticalOffset } = useSettingsStore();
+export function OscilloscopeCanvas({ workerRef }: Props) {
+  const canvasRef = typeof document !== 'undefined'
+      ? require('react').useRef<HTMLCanvasElement>()
+      : { current: null };
+
+  const {
+    xStart, xShow, yPeakToPeak,
+    verticalOffset, channelVisible,
+  } = useSettingsStore();
 
   // Boot the OffscreenCanvas worker once on mount
   useEffect(() => {
-    if (!canvasRef.current) return;
-    const offscreen = canvasRef.current.transferControlToOffscreen();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ref = canvasRef as any;
+    if (!ref.current) return;
+    const offscreen = ref.current.transferControlToOffscreen();
     const worker = new Worker(
-      new URL('../../features/data-stream/worker/streamWorker.ts', import.meta.url),
-      { type: 'module' }
+        new URL('../../features/data-stream/worker/streamWorker.ts', import.meta.url),
+        { type: 'module' }
     );
     worker.postMessage(
-      { type: 'init', canvas: offscreen, channelCount: 2 },
-      [offscreen]     // transfer ownership — zero-copy
+        { type: 'init', canvas: offscreen, channelCount: 2 },
+        [offscreen]
     );
-    workerRef.current = worker;
+    (workerRef as React.MutableRefObject<Worker | null>).current = worker;
     return () => {
       worker.postMessage({ type: 'stop' });
       worker.terminate();
+      (workerRef as React.MutableRefObject<Worker | null>).current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Forward settings changes to the worker
+  // Forward settings to worker whenever they change
   useEffect(() => {
-    workerRef.current?.postMessage({ type: 'settings', voltsPerDiv, verticalOffset });
-  }, [voltsPerDiv, verticalOffset]);
+    workerRef.current?.postMessage({
+      type: 'settings', xStart, xShow, yPeakToPeak,
+      verticalOffset, channelVisible,
+    });
+  }, [xStart, xShow, yPeakToPeak, verticalOffset, channelVisible, workerRef]);
 
-  // Keep canvas pixel size in sync with its CSS size
+  // Keep canvas pixel size in sync with CSS size
   useEffect(() => {
-    if (!canvasRef.current) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ref = canvasRef as any;
+    if (!ref.current) return;
     const ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
       workerRef.current?.postMessage({
@@ -43,17 +62,16 @@ export function OscilloscopeCanvas() {
         height: Math.round(height),
       });
     });
-    ro.observe(canvasRef.current);
+    ro.observe(ref.current);
     return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useDataStream(workerRef);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ display: 'block', width: '100%', height: '100%', background: '#0d1117', borderRadius: 4 }}
-      aria-label="Oscilloscope waveform display"
-    />
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <canvas ref={canvasRef as any} className={styles.canvas}
+              aria-label="Oscilloscope waveform display" />
   );
 }

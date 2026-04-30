@@ -6,12 +6,12 @@
  *   { type: 'init',     canvas: OffscreenCanvas, channelCount: number }
  *   { type: 'samples',  channel: number, data: Float32Array }
  *   { type: 'resize',   width: number, height: number }
- *   { type: 'settings', voltsPerDiv: number[], verticalOffset: number[] }
+ *   { type: 'settings', xStart: number, xShow: number, yPeakToPeak: number,
+ *                        verticalOffset: number[], channelVisible: boolean[] }
  *   { type: 'stop' }
  *
- * Note: timePerDiv is intentionally kept in settings but not yet used
- * for x-axis scaling — that calculation happens in the widget layer once
- * sample-rate metadata is available from the stream.
+ *  xStart >= 0  → show samples starting xStart positions from the live end
+ *  xStart = -1  → live (always show the latest xShow samples)
  */
 
 import { RingBuffer } from '../../../shared/lib/ringBuffer';
@@ -23,19 +23,15 @@ let ctx:      OffscreenCanvasRenderingContext2D | null = null;
 let channels: RingBuffer[] = [];
 let rafHandle = 0;
 
-// Render settings (updated via 'settings' message)
-let voltsPerDiv:    number[] = [1.0];
-let verticalOffset: number[] = [0.0];
+let xStart:         number    = -1;
+let xShow:          number    = 8192;
+let yPeakToPeak:    number    = 8.0;
+let verticalOffset: number[]  = [0.0, 0.0];
+let channelVisible: boolean[] = [true, true];
 
 const H_DIVS = 10;
 const V_DIVS = 8;
-
-const CHANNEL_COLORS = [
-  '#4fffb0', // ch0 — green
-  '#ff9f43', // ch1 — amber
-  '#48dbfb', // ch2 — cyan
-  '#ff6b81', // ch3 — pink
-];
+const CHANNEL_COLORS = ['#87cefa', '#f08080', '#48dbfb', '#ff6b81'];
 
 function paint() {
   if (!canvas || !ctx) return;
@@ -56,25 +52,28 @@ function paint() {
     const y = (i / V_DIVS) * H;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  // Center axes — slightly brighter
+  // Centre axes
   ctx.strokeStyle = 'rgba(255,255,255,0.16)';
-  ctx.beginPath(); ctx.moveTo(W / 2, 0);   ctx.lineTo(W / 2, H); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, H / 2);   ctx.lineTo(W, H / 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
 
-  // Channels
+  const yScale = H / yPeakToPeak;
+
   for (let ch = 0; ch < channels.length; ch++) {
-    const buf  = channels[ch];
+    if (channelVisible[ch] === false) continue;
+    const buf = channels[ch];
     if (buf.length < 2) continue;
 
-    const vpd  = voltsPerDiv[ch]    ?? 1.0;
-    const voff = verticalOffset[ch] ?? 0.0;
-    const samples = buf.readLast(W);
+    const samples = xStart < 0
+        ? buf.readLast(xShow)
+        : buf.readFromEnd(xStart, xShow);
 
+    if (samples.length < 2) continue;
+
+    const voff = verticalOffset[ch] ?? 0.0;
     ctx.strokeStyle = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
     ctx.lineWidth   = 1.5;
     ctx.beginPath();
-
-    const yScale = (H / V_DIVS) / vpd; // pixels per volt
 
     for (let i = 0; i < samples.length; i++) {
       const x = (i / (samples.length - 1)) * W;
@@ -89,15 +88,18 @@ function paint() {
 
 self.onmessage = (e: MessageEvent) => {
   const msg = e.data as {
-    type: string;
-    canvas?: OffscreenCanvas;
-    channelCount?: number;
-    channel?: number;
-    data?: Float32Array;
-    width?: number;
-    height?: number;
-    voltsPerDiv?: number[];
+    type:            string;
+    canvas?:         OffscreenCanvas;
+    channelCount?:   number;
+    channel?:        number;
+    data?:           Float32Array;
+    width?:          number;
+    height?:         number;
+    xStart?:         number;
+    xShow?:          number;
+    yPeakToPeak?:    number;
     verticalOffset?: number[];
+    channelVisible?: boolean[];
   };
 
   switch (msg.type) {
@@ -105,8 +107,8 @@ self.onmessage = (e: MessageEvent) => {
       canvas   = msg.canvas!;
       ctx      = canvas.getContext('2d')!;
       channels = Array.from(
-        { length: msg.channelCount ?? 1 },
-        () => new RingBuffer(BUFFER_CAPACITY)
+          { length: msg.channelCount ?? 2 },
+          () => new RingBuffer(BUFFER_CAPACITY)
       );
       rafHandle = requestAnimationFrame(paint);
       break;
@@ -118,15 +120,15 @@ self.onmessage = (e: MessageEvent) => {
       break;
     }
     case 'resize': {
-      if (canvas) {
-        canvas.width  = msg.width!;
-        canvas.height = msg.height!;
-      }
+      if (canvas) { canvas.width = msg.width!; canvas.height = msg.height!; }
       break;
     }
     case 'settings': {
-      if (msg.voltsPerDiv)    voltsPerDiv    = msg.voltsPerDiv;
-      if (msg.verticalOffset) verticalOffset = msg.verticalOffset;
+      if (msg.xStart         !== undefined) xStart         = msg.xStart;
+      if (msg.xShow          !== undefined) xShow          = msg.xShow;
+      if (msg.yPeakToPeak    !== undefined) yPeakToPeak    = msg.yPeakToPeak;
+      if (msg.verticalOffset !== undefined) verticalOffset = msg.verticalOffset;
+      if (msg.channelVisible !== undefined) channelVisible = msg.channelVisible;
       break;
     }
     case 'stop': {
@@ -135,3 +137,5 @@ self.onmessage = (e: MessageEvent) => {
     }
   }
 };
+
+

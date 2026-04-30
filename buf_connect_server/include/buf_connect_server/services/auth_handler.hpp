@@ -17,7 +17,8 @@ namespace buf_connect_server {
         class AuthHandler {
         public:
             AuthHandler(auth::UserStore&         user_store,
-                        const AuthConfig&        auth_config,
+                        const std::string & _jwt_secret,
+                        const SessionConfig & _session_config,
                         session::SessionManager& mgr);
 
             // Processes a Login RPC / HTTP request.
@@ -38,29 +39,22 @@ namespace buf_connect_server {
         private:
             // Tracks a pending (conflicting) login so TakeOver can find it.
             struct PendingLogin {
-                std::string user_id;
-                std::string new_session_id;
+                session::UserUuid user_id;
+                session::SessionUuid new_session_id;
                 std::string role;
             };
 
             // Issues a call_token JWT (type = "call_token").
-            std::string IssueCallToken(const std::string& user_id,
-                                       const std::string& role,
-                                       const std::string& session_id) const;
+            std::string IssueCallToken(const session::UserUuid &_user_uuid,
+                                       const std::string& _role,
+                                       const session::SessionUuid &_session_uuid) const;
 
-            // Issues a session_ticket JWT (type = "session_ticket").
-            std::string IssueSessionTicket(const std::string & user_id,
-                                           const std::string& role,
-                                           const std::string& session_id) const;
 
-            // Builds a Set-Cookie header value for the session_ticket cookie.
-            static std::string BuildSessionTicketCookie(const std::string& token) ;
-
-            // Extracts a cookie value by name from a raw Cookie header string.
+            // Extracts a call token value by name from an authorization bearer
             static std::string ExtractAuthorizationBearer(const connect::ParsedConnectRequest& req);
 
             auth::UserStore&         user_store_;
-            const AuthConfig&        auth_config_;
+            const SessionConfig &    kSessionConfig;
             session::SessionManager& mgr_;
             std::shared_ptr<auth::JwtIssuer> jwt_issuer_;
 

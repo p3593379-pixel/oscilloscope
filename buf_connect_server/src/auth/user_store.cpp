@@ -51,7 +51,7 @@ namespace {
         return make_storage(
                 db_path,
                 make_table("users",
-                           make_column("id",            &buf_connect_server::auth::UserRecord::id,
+                           make_column("id",            &buf_connect_server::auth::UserRecord::uuid,
                                        primary_key()),
                            make_column("username",      &buf_connect_server::auth::UserRecord::username,
                                        unique()),
@@ -93,7 +93,7 @@ buf_connect_server::auth::UserStore::CreateUser(
     auto existing = FindByUsername(username);
     if (existing) return std::nullopt;
     UserRecord rec;
-    rec.id            = GenerateUuid();
+    rec.uuid            = GenerateUuid();
     rec.username      = username;
     rec.password_hash = HashPassword(password);
     rec.role          = role;

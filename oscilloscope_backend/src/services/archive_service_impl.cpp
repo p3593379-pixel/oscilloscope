@@ -10,11 +10,9 @@
 #include <sstream>
 #include <iomanip>
 
-ArchiveServiceImpl::ArchiveServiceImpl(
-        const buf_connect_server::AuthConfig& auth_config)
-        : auth_config_(auth_config) {
-    stream_token_ = std::make_shared<buf_connect_server::auth::StreamToken>(
-            auth_config_.jwt_secret);
+ArchiveServiceImpl::ArchiveServiceImpl(const std::string & _jwt_secret)
+{
+    stream_token_ = std::make_shared<buf_connect_server::auth::StreamToken>(_jwt_secret);
 }
 
 std::string ArchiveServiceImpl::ServicePath() const {

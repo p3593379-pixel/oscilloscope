@@ -14,8 +14,7 @@ namespace buf_connect_server::services {
 // Registered automatically by BufConnectServer::Start().
     class AdminHandler final : public ServiceHandlerBase {
     public:
-        AdminHandler(auth::UserStore&  user_store,
-                     const AuthConfig& auth_config);
+        AdminHandler(auth::UserStore&  user_store, const std::string & _jwt_secret);
 
         std::string ServicePath() const override;
         void RegisterRoutes(BufConnectServer& server) override;

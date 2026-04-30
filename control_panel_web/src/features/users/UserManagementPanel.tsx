@@ -47,7 +47,7 @@ export default function UserManagementPanel() {
       setFormErr('Password required.');
       return;
     }
-    const r = await configClient.resetPassword( {username: showReset.username, new_password: showReset.new_password });
+    const r = await configClient.resetPassword(showReset.username.toString(), showReset.new_password);
     if (r.error) { setFormErr(r.error); return; }
     setShowReset(null); setFormErr('');
   };
