@@ -22,6 +22,8 @@ struct ParsedConnectRequest {
 
 // Extract Bearer token from Authorization header value.
 std::string ExtractBearerToken(const std::string& authorization_header);
+std::string ExtractAuthorizationBearer(const connect::ParsedConnectRequest& req);
+std::vector<uint8_t> ExtractUnaryBody(const connect::ParsedConnectRequest& req);
 
 }  // namespace buf_connect_server::connect
 

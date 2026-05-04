@@ -2,6 +2,7 @@
 #define OSCILLOSCOPE_BACKEND_SERVICES_OSCILLOSCOPE_SERVICE_IMPL_HPP
 
 #include "buf_connect_server/server.hpp"
+#include "buf_connect_server/auth/stream_token.hpp"
 #include <mutex>
 #include <string>
 
@@ -23,7 +24,7 @@ private:
                               buf_connect_server::connect::ConnectResponseWriter&);
 
     // Passed in at construction time — used only to derive the HMAC key
-    std::string jwt_secret_;
+    buf_connect_server::auth::StreamToken stream_token_;
 
     // Settings are written by UpdateSettings and read by the streaming loop
     mutable std::mutex settings_mutex_;

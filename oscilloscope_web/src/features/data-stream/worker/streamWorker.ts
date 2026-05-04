@@ -1,6 +1,6 @@
 /**
  * OffscreenCanvas worker — receives decoded DataChunk samples from the main
- * thread via postMessage and paints the waveform directly onto an OffscreenCanvas.
+ * thread and paints the waveform directly onto an OffscreenCanvas.
  *
  * Message protocol (main → worker):
  *   { type: 'init',     canvas: OffscreenCanvas, channelCount: number }
@@ -9,9 +9,6 @@
  *   { type: 'settings', xStart: number, xShow: number, yPeakToPeak: number,
  *                        verticalOffset: number[], channelVisible: boolean[] }
  *   { type: 'stop' }
- *
- *  xStart >= 0  → show samples starting xStart positions from the live end
- *  xStart = -1  → live (always show the latest xShow samples)
  */
 
 import { RingBuffer } from '../../../shared/lib/ringBuffer';
@@ -25,24 +22,38 @@ let rafHandle = 0;
 
 let xStart:         number    = -1;
 let xShow:          number    = 8192;
-let yPeakToPeak:    number    = 8.0;
+let yPeakToPeak:    number    = 2.5;
 let verticalOffset: number[]  = [0.0, 0.0];
 let channelVisible: boolean[] = [true, true];
 
+// FPS throttle — render at most 30 fps so we don't burn the GPU idle
+const TARGET_FPS      = 30;
+const FRAME_INTERVAL  = 1000 / TARGET_FPS;
+let   lastFrameTime   = 0;
+
 const H_DIVS = 10;
 const V_DIVS = 8;
-const CHANNEL_COLORS = ['#87cefa', '#f08080', '#48dbfb', '#ff6b81'];
 
-function paint() {
+// Darker colours tuned for a white canvas
+const CHANNEL_COLORS = ['#1565c0', '#c62828', '#00695c', '#6a1b9a'];
+
+function paint(now: number) {
+  rafHandle = requestAnimationFrame(paint);
+
+  // Throttle to TARGET_FPS
+  if (now - lastFrameTime < FRAME_INTERVAL) return;
+  lastFrameTime = now;
+
   if (!canvas || !ctx) return;
   const W = canvas.width;
   const H = canvas.height;
 
-  ctx.fillStyle = '#0d1117';
+  // White background
+  ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
 
-  // Minor grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  // Minor grid lines — light grey
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= H_DIVS; i++) {
     const x = (i / H_DIVS) * W;
@@ -52,15 +63,17 @@ function paint() {
     const y = (i / V_DIVS) * H;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  // Centre axes
-  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+
+  // Centre axes — medium grey
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
+  ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
 
   const yScale = H / yPeakToPeak;
 
   for (let ch = 0; ch < channels.length; ch++) {
-    if (channelVisible[ch] === false) continue;
+    if (!channelVisible[ch]) continue;
     const buf = channels[ch];
     if (buf.length < 2) continue;
 
@@ -82,8 +95,6 @@ function paint() {
     }
     ctx.stroke();
   }
-
-  rafHandle = requestAnimationFrame(paint);
 }
 
 self.onmessage = (e: MessageEvent) => {
@@ -137,5 +148,3 @@ self.onmessage = (e: MessageEvent) => {
     }
   }
 };
-
-

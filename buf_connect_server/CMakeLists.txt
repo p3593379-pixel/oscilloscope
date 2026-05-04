@@ -27,7 +27,7 @@ add_library(buf_connect_server STATIC
         src/server.cpp
         # ── Migrated service handlers ──
         src/services/auth_handler.cpp
-#        src/services/session_handler.cpp
+        src/services/session_handler.cpp
 #        src/services/admin_handler.cpp
 )
 

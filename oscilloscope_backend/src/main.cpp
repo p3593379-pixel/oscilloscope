@@ -19,11 +19,14 @@ int main(int argc, char** argv) {
     // BufConnectServer owns the UserStore; db path comes from config
     buf_connect_server::BufConnectServer server(config);
 
-    server.RegisterService(
-            // Pass jwt_secret so the data plane can validate stream tokens
-            std::make_shared<OscilloscopeServiceImpl>(jwt_secret));
-    server.RegisterService(
-            std::make_shared<ArchiveServiceImpl>(jwt_secret));
+    // Pass jwt_secret so the data plane can validate stream tokens
+    auto osc_service = std::make_shared<OscilloscopeServiceImpl>(jwt_secret);
+
+    server.RegisterService(osc_service);
+    osc_service->RegisterRoutes(server);
+
+//    server.RegisterService(
+//            std::make_shared<ArchiveServiceImpl>(jwt_secret));
 
     spdlog::info("oscilloscope_backend starting");
     server.Start(jwt_secret);

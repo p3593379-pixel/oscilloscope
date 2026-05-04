@@ -27,7 +27,6 @@ export function useRenewCallToken() {
             }
             const client = createClient(AuthService, makeControlTransport(currentToken));
             const response = await client.renewCallToken({});
-            console.log("renewCallToken")
             const payload = decodeJwtPayload<{ exp: number }>(response.callToken);
             setCallToken(response.callToken);
             scheduleRenewalRef.current(payload.exp);

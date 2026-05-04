@@ -192,22 +192,33 @@ static int on_request_recv(nghttp2_session* session, SessionContext* ctx, int32_
             };
 
             nghttp2_submit_data(session, NGHTTP2_FLAG_NONE, stream_id, &provider);
+            nghttp2_session_send(session);
         }
 
         return !ctx->closed.load();
     };
 
-    buf_connect_server::connect::ConnectResponseWriter writer(
-            write_fn, header_fn, sd.request.is_streaming);
-
-    if (ctx->handler) {
-        ctx->handler(sd.request, writer);
+    if (sd.request.is_streaming) {
+        // Streaming handler: run on its own thread so ServeConnection
+        // continues the recv loop and nghttp2_session_send keeps firing.
+        std::thread([sd = std::move(sd), write_fn, header_fn, ctx]() mutable {
+            buf_connect_server::connect::ConnectResponseWriter writer(
+                    write_fn, header_fn, true);
+            if (ctx->handler) ctx->handler(sd.request, writer);
+        }).detach();
     } else {
-        writer.SendHeaders(buf_connect_server::connect::kHttpInternalError,
-                           "application/json");
-        writer.WriteError("internal", "no handler registered");
-    }
 
+        buf_connect_server::connect::ConnectResponseWriter writer(write_fn, header_fn, sd.request.is_streaming);
+
+        if (ctx->handler) {
+            ctx->handler(sd.request, writer);
+        }
+        else {
+            writer.SendHeaders(buf_connect_server::connect::kHttpInternalError,
+                               "application/json");
+            writer.WriteError("internal", "no handler registered");
+        }
+    }
     ctx->streams.erase(it);
     // RST only on error — for clean streams nghttp2 closes via DATA+EOF flag
     return 0;

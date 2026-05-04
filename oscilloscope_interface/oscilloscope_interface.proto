@@ -21,6 +21,12 @@ message StreamDataRequest {
   DecimationTier requested_tier     = 1;
   uint32         max_bandwidth_mbps = 2;
   string         stream_token       = 3;
+  // Number of samples per channel in each streamed frame.
+  // 0 → server default (8192).
+  uint32         frame_size         = 4;
+  // Target frame rate in frames-per-second.
+  // 0 → server default (30).
+  uint32         target_fps         = 5;
 }
 
 message DataChunk {

@@ -13,7 +13,7 @@ buf_connect_server::auth::AuthMiddleware::Authenticate(const std::string& author
     if (token.empty()) return std::nullopt;
     auto claims = jwt_issuer_->Verify(token);
     if (!claims) return std::nullopt;
-    if (claims->type != "call_token") return std::nullopt;  // FIXED: was "access"
+    if (claims->type != "call_token") return std::nullopt;
 
     ConnectContext ctx;
     ctx.user_id      = claims->user_uuid;

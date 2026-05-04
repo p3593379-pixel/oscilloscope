@@ -60,27 +60,25 @@ namespace buf_connect_server {
         }
 
 // static
-        std::string AuthHandler::ExtractAuthorizationBearer(const connect::ParsedConnectRequest& req)
-        {
-            namespace c = connect;
+//        std::string AuthHandler::ExtractAuthorizationBearer(const connect::ParsedConnectRequest& req)
+//        {
+//            namespace c = connect;
+//            auto auth_it = req.headers.find("authorization");
+//            if (auth_it == req.headers.end() || auth_it->second.rfind("Bearer ", 0) != 0) {
+//                return {};
+//            }
+//            return auth_it->second.substr(7); // strip "Bearer "
+//        }
 
-            // Read from Authorization header instead of cookie
-            auto auth_it = req.headers.find("authorization");
-            if (auth_it == req.headers.end() || auth_it->second.rfind("Bearer ", 0) != 0) {
-                return {};
-            }
-            return auth_it->second.substr(7); // strip "Bearer "
-        }
-
-        static std::vector<uint8_t> ExtractUnaryBody(const connect::ParsedConnectRequest& req)
-        {
-            if (req.body.size() < 5)
-                return req.body;
-            auto decoded = buf_connect_server::connect::DecodeFrame(std::span<const uint8_t>(req.body));
-            if (decoded.bytes_consumed > 0)
-                return {decoded.payload.begin(), decoded.payload.end()};
-            return req.body;
-        }
+//        static std::vector<uint8_t> ExtractUnaryBody(const connect::ParsedConnectRequest& req)
+//        {
+//            if (req.body.size() < 5)
+//                return req.body;
+//            auto decoded = buf_connect_server::connect::DecodeFrame(std::span<const uint8_t>(req.body));
+//            if (decoded.bytes_consumed > 0)
+//                return {decoded.payload.begin(), decoded.payload.end()};
+//            return req.body;
+//        }
 
 
 // ---------------------------------------------------------------------------
@@ -91,7 +89,7 @@ namespace buf_connect_server {
         {
             namespace c = connect;
 
-            auto body = ExtractUnaryBody(req);
+            auto body = c::ExtractUnaryBody(req);
             v2::LoginRequest login_req;
             if (!login_req.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
                 writer.SendHeaders(c::kHttpBadRequest, "application/json");
@@ -195,7 +193,7 @@ namespace buf_connect_server {
 
         void AuthHandler::HandleRenewCallToken(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& writer) {
             namespace c = connect;
-            const std::string raw_ticket = ExtractAuthorizationBearer(req);
+            const std::string raw_ticket = c::ExtractAuthorizationBearer(req);
             if (raw_ticket.empty()) {
                 writer.SendHeaders(c::kHttpUnauthorized, "application/json");
                 writer.WriteError(std::string(c::kCodeUnauthenticated), "missing call token");
@@ -243,7 +241,7 @@ namespace buf_connect_server {
         {
             namespace c = connect;
             // 1. Parse request body
-            auto body = ExtractUnaryBody(req);
+            auto body = c::ExtractUnaryBody(req);
             v2::TakeOverRequest takeover_req;
             if (!takeover_req.ParseFromArray(body.data(), static_cast<int>(body.size()))
                 || takeover_req.call_token().empty()) {

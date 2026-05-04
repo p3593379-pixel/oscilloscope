@@ -32,7 +32,7 @@ namespace buf_connect_server::auth {
     inline constexpr std::string_view kTokenTypeCallToken    = "call_token";
 
 /// Type claim value for a session_ticket JWT.
-    inline constexpr std::string_view kTokenTypeSessionTicket = "session_ticket";
+//    inline constexpr std::string_view kTokenTypeSessionTicket = "session_ticket";
 
 // ---------------------------------------------------------------------------
 // JwtClaims
@@ -104,7 +104,7 @@ namespace buf_connect_server::auth {
 // /buf_connect_server.v2.AuthService/Refresh.
 
 /// Builds a fully-formed Set-Cookie header value for a session_ticket.
-    [[nodiscard]] std::string BuildSessionTicketCookie(const std::string& token);
+//    [[nodiscard]] std::string BuildSessionTicketCookie(const std::string& token);
 
 // ---------------------------------------------------------------------------
 // CookieParser

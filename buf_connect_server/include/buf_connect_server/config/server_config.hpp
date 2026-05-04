@@ -51,7 +51,7 @@ namespace buf_connect_server {
 
     struct ServerConfig {
         InterfaceConfig control_plane;
-        InterfaceConfig data_plane;
+        InterfaceConfig data_plane {"127.0.0.1", 8082, true};
         SessionConfig   session;
         StreamingConfig streaming;
         LogConfig       log;

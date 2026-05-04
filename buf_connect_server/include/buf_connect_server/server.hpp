@@ -13,10 +13,11 @@ namespace buf_connect_server {
 
     class ServiceHandlerBase {
     public:
+        ServiceHandlerBase () = default;
         virtual ~ServiceHandlerBase() = default;
         // Returns the fully-qualified service path prefix, e.g.
         // "/oscilloscope_interface.v2.AuthService"
-        virtual std::string ServicePath() const = 0;
+        [[nodiscard]] virtual std::string ServicePath() const = 0;
         // Register all RPC routes onto the router
         virtual void RegisterRoutes(class BufConnectServer& server) = 0;
     };

@@ -11,7 +11,8 @@
 #include <mutex>
 #include <utility>
 
-OscilloscopeServiceImpl::OscilloscopeServiceImpl(std::string jwt_secret) : jwt_secret_(std::move(jwt_secret)) {};
+OscilloscopeServiceImpl::OscilloscopeServiceImpl(std::string jwt_secret)
+        : stream_token_(jwt_secret) {}
 
 std::string OscilloscopeServiceImpl::ServicePath() const {
     return "/oscilloscope_interface.v2.OscilloscopeService";
@@ -21,14 +22,12 @@ void OscilloscopeServiceImpl::RegisterRoutes(
         buf_connect_server::BufConnectServer& server) {
     namespace c = buf_connect_server::connect;
 
-    // StreamData lives on the DATA plane — validated by stream token only
     server.RegisterDataRoute(
             "/oscilloscope_interface.v2.OscilloscopeService/StreamData",
             [this](const c::ParsedConnectRequest& req, c::ConnectResponseWriter& w) {
                 HandleStreamData(req, w);
             });
 
-    // Settings RPCs live on the CONTROL plane — require a valid JWT
     server.RegisterControlRoute(
             "/oscilloscope_interface.v2.OscilloscopeService/GetSettings",
             [this](const c::ParsedConnectRequest& req, c::ConnectResponseWriter& w) {
@@ -43,12 +42,13 @@ void OscilloscopeServiceImpl::RegisterRoutes(
 
 // ─── StreamData ──────────────────────────────────────────────────────────────
 
-void OscilloscopeServiceImpl::HandleStreamData(
-        const buf_connect_server::connect::ParsedConnectRequest& req,
-        buf_connect_server::connect::ConnectResponseWriter& writer) {
+void OscilloscopeServiceImpl::HandleStreamData(const buf_connect_server::connect::ParsedConnectRequest& req,
+        buf_connect_server::connect::ConnectResponseWriter& writer)
+{
     namespace c = buf_connect_server::connect;
+    namespace a = buf_connect_server::auth;
 
-    // ── 1. Decode the Connect streaming frame wrapper ───────────────────────
+    // ── 1. Decode Connect streaming frame wrapper ────────────────────────────
     if (req.body.size() < 5) {
         writer.SendHeaders(c::kHttpBadRequest, "application/json");
         writer.WriteError(std::string(c::kCodeInvalidArgument), "missing frame");
@@ -69,47 +69,43 @@ void OscilloscopeServiceImpl::HandleStreamData(
         return;
     }
 
-    // ── 2. Validate stream token (HMAC — no database lookup needed) ─────────
-    // The stream_token field is set by the client from the token it received
-    // via SessionService/GetStreamToken.
-    {
-        // We need the JWT master secret to derive the HMAC key.
-        // We receive it at RegisterRoutes time — stored as member.
-        buf_connect_server::auth::StreamToken st(jwt_secret_);
-        auto claims = st.Validate(stream_req.stream_token());
-        if (!claims) {
-            writer.SendHeaders(c::kHttpUnauthorized, "application/json");
-            writer.WriteError(std::string(c::kCodeUnauthenticated),
-                              "invalid or expired stream token");
-            return;
-        }
-        // Enforce decimation tier based on what was granted in the token
-        if (claims->tier == "preview" &&
-            stream_req.requested_tier() ==
-            oscilloscope_interface::v2::DECIMATION_TIER_FULL) {
-            spdlog::warn("Client requested FULL tier but token grants only PREVIEW");
-            stream_req.set_requested_tier(
-                    oscilloscope_interface::v2::DECIMATION_TIER_PREVIEW);
-        }
+    // ── 2. Validate stream token ─────────────────────────────────────────────
+    auto claims = stream_token_.Validate(stream_req.stream_token());
+    if (!claims) {
+        writer.SendHeaders(c::kHttpUnauthorized, "application/json");
+        writer.WriteError(std::string(c::kCodeUnauthenticated),
+                          "invalid or expired stream token");
+        return;
+    }
+    if (claims->decimation_rate > 1 &&
+        stream_req.requested_tier() == oscilloscope_interface::v2::DECIMATION_TIER_FULL) {
+        spdlog::warn("Client requested FULL tier but token grants only PREVIEW");
+        stream_req.set_requested_tier(
+                oscilloscope_interface::v2::DECIMATION_TIER_PREVIEW);
     }
 
-    // ── 3. Determine frame size for the granted tier ─────────────────────────
-    auto tier = stream_req.requested_tier() ==
-                oscilloscope_interface::v2::DECIMATION_TIER_FULL
-                ? oscilloscope_interface::v2::DECIMATION_TIER_FULL
-                : oscilloscope_interface::v2::DECIMATION_TIER_PREVIEW;
+    // ── 3. Resolve streaming parameters ─────────────────────────────────────
+    //   frame_size  — samples per channel per frame (client hint, or default 8192)
+    //   target_fps  — frames per second             (client hint, or default 30)
+    const uint32_t samples_per_frame =
+            stream_req.frame_size() > 0 ? stream_req.frame_size() : 8192u;
 
-    uint32_t samples_per_frame;
-    {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        uint32_t frame_bytes = tier == oscilloscope_interface::v2::DECIMATION_TIER_FULL
-                               ? 65536 : 8192;
-        samples_per_frame = frame_bytes / channels_ / sizeof(int16_t);
-    }
+    const uint32_t target_fps =
+            stream_req.target_fps() > 0 ? stream_req.target_fps() : 30u;
 
+    const auto frame_period =
+            std::chrono::microseconds(1'000'000u / target_fps);
+
+    const auto tier = stream_req.requested_tier() ==
+                      oscilloscope_interface::v2::DECIMATION_TIER_FULL
+                      ? oscilloscope_interface::v2::DECIMATION_TIER_FULL
+                      : oscilloscope_interface::v2::DECIMATION_TIER_PREVIEW;
+
+    spdlog::debug("[StreamData] frame_size={} fps={}", samples_per_frame, target_fps);
+
+    // ── 4. Start streaming ───────────────────────────────────────────────────
     writer.SendHeaders(c::kHttpOk, std::string(c::kContentTypeConnectProto));
 
-    // ── 4. Stream loop ───────────────────────────────────────────────────────
     uint32_t sr, ch;
     {
         std::lock_guard<std::mutex> lock(settings_mutex_);
@@ -120,10 +116,14 @@ void OscilloscopeServiceImpl::HandleStreamData(
     uint64_t  sequence = 0;
 
     while (writer.IsClientConnected()) {
-        auto samples = adc.ReadChunk(samples_per_frame);
+        const auto frame_start = std::chrono::steady_clock::now();
 
+        // Acquire one frame of interleaved float32 samples
+        const auto raw_samples = adc.ReadChunk(samples_per_frame);
+
+        // Build DataChunk
         oscilloscope_interface::v2::DataChunk chunk;
-        chunk.set_samples(samples.data(), samples.size());
+        chunk.set_samples(raw_samples.data(), raw_samples.size());
         chunk.set_sequence_number(sequence++);
         chunk.set_timestamp_ns(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -138,18 +138,12 @@ void OscilloscopeServiceImpl::HandleStreamData(
         std::vector<uint8_t> out(chunk.ByteSizeLong());
         chunk.SerializeToArray(out.data(), static_cast<int>(out.size()));
         writer.WriteStreamingFrame(std::span<const uint8_t>(out));
-
-        // Bandwidth throttling
-        if (stream_req.max_bandwidth_mbps() > 0) {
-            uint64_t delay_us = (static_cast<uint64_t>(out.size()) * 8ULL * 1'000'000ULL) /
-                                (stream_req.max_bandwidth_mbps() * 1'000'000ULL);
-            std::this_thread::sleep_for(std::chrono::microseconds(delay_us));
-        } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
+        SPDLOG_INFO("Sent frame; size {}", out.size());
+        // ── FPS throttle ─────────────────────────────────────────────────────
+        const auto elapsed = std::chrono::steady_clock::now() - frame_start;
+        if (elapsed < frame_period)
+            std::this_thread::sleep_for(frame_period - elapsed);
     }
-
-    writer.WriteEndOfStream();
 }
 
 // ─── GetSettings ─────────────────────────────────────────────────────────────
@@ -182,7 +176,6 @@ void OscilloscopeServiceImpl::HandleUpdateSettings(
         buf_connect_server::connect::ConnectResponseWriter& writer) {
     namespace c = buf_connect_server::connect;
 
-    // Unary: try frame-decode, fall back to raw proto
     std::vector<uint8_t> body = req.body;
     if (body.size() >= 5) {
         auto d = c::DecodeFrame(std::span<const uint8_t>(body));

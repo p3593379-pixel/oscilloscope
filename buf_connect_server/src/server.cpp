@@ -109,7 +109,7 @@ void buf_connect_server::BufConnectServer::RegisterDataRoute(
         impl_->data_plane_->GetRouter().Register(path, std::move(handler));
     } else {
         // Single-interface mode: data routes also go on the control plane
-        spdlog::warn("Single-interface mode: registering data route '{}' on control plane", path);
+        SPDLOG_WARN("Single-interface mode: registering data route '{}' on control plane", path);
         impl_->control_plane_->GetRouter().Register(path, std::move(handler));
     }
 }
@@ -133,13 +133,13 @@ void buf_connect_server::BufConnectServer::Start(const std::string & _jwt_secret
     // Auto-register built-in handlers — auth / session / admin
     auto auth_h    = std::make_shared<services::AuthHandler>(
             impl_->user_store_, _jwt_secret, impl_->config_.session, impl_->session_manager_);
-//    auto session_h = std::make_shared<services::SessionHandler>(
-//            impl_->session_manager_, impl_->config_.auth);
+    auto session_h = std::make_shared<services::SessionHandler>(
+            impl_->session_manager_, _jwt_secret);
 //    auto admin_h   = std::make_shared<services::AdminHandler>(
 //            impl_->user_store_, impl_->config_.auth);
 
     auth_h->RegisterRoutes(*this);
-//    session_h->RegisterRoutes(*this);
+    session_h->RegisterRoutes(*this);
 //    admin_h->RegisterRoutes(*this);
 
     // Start the h2c/h2 transport planes

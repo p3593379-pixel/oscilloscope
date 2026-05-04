@@ -1,4 +1,4 @@
-/* ── Page shell ─────────────────────────────────────────────────────────── */
+/* Page shell */
 .page {
     display: flex;
     flex-direction: column;
@@ -12,34 +12,70 @@
 .menubar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     height: 44px;
-    padding: 0 16px;
+    padding: 0 14px;
     background: #ffffff;
     border-bottom: 1px solid #e0e0e0;
     flex-shrink: 0;
-    gap: 12px;
+    gap: 10px;
     font-family: monospace;
+    position: relative;
+    z-index: 20;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* ── Brand (left) ────────────────────────────────────────────────────────── */
+/* Brand (left) */
 .brand {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
 }
-
 .brandName {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    color: #1a1a1a;
-    font-family: monospace;
+    letter-spacing: 0.08em;
+    color: #111;
     text-transform: uppercase;
 }
 
-/* ── Status area (right) ─────────────────────────────────────────────────── */
+/* Centre: start/stop button */
+.centre {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Start / Stop button */
+.streamBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: monospace;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background 120ms, filter 120ms;
+}
+.streamBtnStart {
+    background: #166534;
+    color: #ffffff;
+}
+.streamBtnStart:hover { filter: brightness(1.15); }
+
+.streamBtnStop {
+    background: #b91c1c;
+    color: #ffffff;
+}
+.streamBtnStop:hover { filter: brightness(1.1); }
+
+/* Status area (right) */
 .statusArea {
     display: flex;
     align-items: center;
@@ -47,7 +83,7 @@
     flex-shrink: 0;
 }
 
-/* Stream live / stopped pill */
+/* LIVE / STOPPED pill */
 .pill {
     display: inline-flex;
     align-items: center;
@@ -57,48 +93,40 @@
     border-radius: 10px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    font-family: monospace;
+    letter-spacing: 0.07em;
 }
 .pillLive    { background: #d4f7e4; color: #166534; border: 1px solid #a7f3d0; }
-.pillStopped { background: #f3f3f3; color: #888;    border: 1px solid #d8d8d8; }
+.pillStopped { background: #f2f2f2; color: #888;    border: 1px solid #d8d8d8; }
 
-@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
-
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 .liveDot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
+    width: 7px; height: 7px; border-radius: 50%;
     background: #16a34a;
     animation: pulse 1.4s ease-in-out infinite;
+    flex-shrink: 0;
 }
 .stoppedDot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: #aaa;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #aaa; flex-shrink: 0;
 }
 
 /* Metadata stats */
-.metaStat {
+.stat {
     font-size: 11px;
     color: #555;
-    font-family: monospace;
     white-space: nowrap;
 }
-
 .divider {
-    width: 1px;
-    height: 18px;
-    background: #d4d4d4;
-    flex-shrink: 0;
-    margin: 0 2px;
+    width: 1px; height: 18px;
+    background: #d4d4d4; flex-shrink: 0; margin: 0 2px;
 }
 
+/* Session badge */
 .sessionBadge {
     font-size: 10px;
     color: #666;
-    font-family: monospace;
     font-weight: 600;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     white-space: nowrap;
 }
 
@@ -118,14 +146,11 @@
     cursor: pointer;
     transition: background 120ms, border-color 120ms;
 }
-.logoutBtn:hover {
-    background: #ededed;
-    border-color: #bbb;
-}
+.logoutBtn:hover { background: #ebebeb; border-color: #bbb; }
 
-/* ── Widget shell (fills remaining space) ────────────────────────────────── */
+/* Widget shell */
 .widgetShell {
     flex: 1;
     min-height: 0;
-    overflow: auto;       /* allows scroll if viewport is too small */
+    overflow: auto;
 }

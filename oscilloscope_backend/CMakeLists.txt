@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(oscilloscope_backend
         src/main.cpp
         src/services/oscilloscope_service_impl.cpp
-        src/services/archive_service_impl.cpp
+#        src/services/archive_service_impl.cpp
         src/hardware/adc_reader.cpp
         src/hardware/dat_file_reader.cpp
 )

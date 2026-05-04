@@ -51,11 +51,11 @@ buf_connect_server::auth::JwtIssuer::Verify(const std::string &token) const
 }
 
 
-[[nodiscard]] std::string buf_connect_server::auth::BuildSessionTicketCookie(const std::string& token)
-{
-    std::ostringstream oss;
-    oss << "session_ticket=" << token
-        << "; HttpOnly; Secure; SameSite=Strict"
-        << "; Path=/buf_connect_server.v2.AuthService/RenewCallToken";
-    return oss.str();
-}
+//[[nodiscard]] std::string buf_connect_server::auth::BuildSessionTicketCookie(const std::string& token)
+//{
+//    std::ostringstream oss;
+//    oss << "session_ticket=" << token
+//        << "; HttpOnly; Secure; SameSite=Strict"
+//        << "; Path=/buf_connect_server.v2.AuthService/RenewCallToken";
+//    return oss.str();
+//}

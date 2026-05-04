@@ -51,10 +51,10 @@ void ArchiveServiceImpl::HandleRequestDownload(
     // Issue 60-second stream token
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     buf_connect_server::auth::StreamTokenClaims claims;
-    claims.sub  = "archive";
+    claims.session_uuid  = "archive";
     claims.tier = "full";
-    claims.iat  = now;
-    claims.exp  = now + 60;
+    claims.issued_at  = now;
+    claims.expires_at  = now + 60;
     auto token = stream_token_->Issue(claims);
 
     uint64_t file_size = std::filesystem::file_size(file_path);

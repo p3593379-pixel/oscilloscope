@@ -11,7 +11,8 @@ class buf_connect_server::transport::DataPlane::Impl {
   std::unique_ptr<http2::Http2Listener> listener_;
   InterfaceConfig                       config_;
 
-  explicit Impl(const InterfaceConfig& cfg) : config_(cfg) {
+  explicit Impl(const InterfaceConfig& cfg) : config_(cfg)
+  {
     listener_ = std::make_unique<http2::Http2Listener>(
         cfg.bind_address, cfg.port,
         cfg.tls.enabled, cfg.tls.cert_path, cfg.tls.key_path);

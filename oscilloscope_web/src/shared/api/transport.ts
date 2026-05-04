@@ -34,5 +34,6 @@ export function makeDataTransport() {
   return createConnectTransport({
     baseUrl: DATA_PLANE_URL,   // nginx routes /oscilloscope_interface.v2.* to the data plane
     useBinaryFormat: true,
+    fetch: fetchWithCredentials,
   });
 }

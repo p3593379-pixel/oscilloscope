@@ -4,14 +4,15 @@
 #include <optional>
 #include <string>
 #include <cstdint>
+#include <chrono>
 
 namespace buf_connect_server::auth {
 
     struct StreamTokenClaims {
-        std::string sub;
-        std::string tier;  // "full" | "preview"
-        int64_t     iat = 0;
-        int64_t     exp = 0;
+        std::string session_uuid;
+        std::chrono::system_clock::time_point issued_at;
+        std::chrono::system_clock::time_point expires_at;
+        double      decimation_rate = 1;
     };
 
     class StreamToken {
@@ -19,10 +20,10 @@ namespace buf_connect_server::auth {
         // jwt_secret is the master secret; HKDF derives stream-token HMAC key.
         explicit StreamToken(const std::string& jwt_secret);
 
-        std::string Issue(const StreamTokenClaims& claims) const;
+        [[nodiscard]] std::string Issue(const StreamTokenClaims& claims) const;
 
         // Returns nullopt if token is invalid, expired, or wrong type.
-        std::optional<StreamTokenClaims> Validate(const std::string& token) const;
+        [[nodiscard]] std::optional<StreamTokenClaims> Validate(const std::string& token) const;
 
     private:
         std::string derived_key_;
