@@ -1,3 +1,4 @@
 cmake-build*
 control_panel_web/node_modules
 control_panel_web/node_modules/*
+.idea

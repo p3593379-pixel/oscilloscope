@@ -167,14 +167,14 @@ static int on_request_recv(nghttp2_session* session, SessionContext* ctx, int32_
             // Subsequent write_fn calls = streaming frames after headers were sent
             // (WatchSessionEvents, StreamData)
             struct BodyState {
+                nghttp2_data_provider provider{};
                 std::vector<uint8_t> data;
                 size_t offset = 0;
             };
-            auto* bs = new BodyState{{data.begin(), data.end()}, 0};
+            auto* bs = new BodyState{{}, {data.begin(), data.end()}, 0};
 
-            nghttp2_data_provider provider{};
-            provider.source.ptr = bs;
-            provider.read_callback = [](nghttp2_session*, int32_t,
+            bs->provider.source.ptr = bs;
+            bs->provider.read_callback = [](nghttp2_session*, int32_t,
                                         uint8_t* buf, size_t length,
                                         uint32_t* flags,
                                         nghttp2_data_source* source,
@@ -191,7 +191,7 @@ static int on_request_recv(nghttp2_session* session, SessionContext* ctx, int32_
                 return static_cast<ssize_t>(to_copy);
             };
 
-            nghttp2_submit_data(session, NGHTTP2_FLAG_NONE, stream_id, &provider);
+            nghttp2_submit_data(session, NGHTTP2_FLAG_NONE, stream_id, &bs->provider);
             nghttp2_session_send(session);
         }
 
@@ -201,10 +201,9 @@ static int on_request_recv(nghttp2_session* session, SessionContext* ctx, int32_
     if (sd.request.is_streaming) {
         // Streaming handler: run on its own thread so ServeConnection
         // continues the recv loop and nghttp2_session_send keeps firing.
-        std::thread([sd = std::move(sd), write_fn, header_fn, ctx]() mutable {
-            buf_connect_server::connect::ConnectResponseWriter writer(
-                    write_fn, header_fn, true);
-            if (ctx->handler) ctx->handler(sd.request, writer);
+        std::thread([sd = std::move(sd), write_fn, header_fn, ctx_shared = ctx]() mutable {
+            buf_connect_server::connect::ConnectResponseWriter writer(write_fn, header_fn, true);
+            if (ctx_shared->handler) ctx_shared->handler(sd.request, writer);
         }).detach();
     } else {
 
@@ -298,7 +297,7 @@ class buf_connect_server::http2::Http2Listener::Impl {
   }
 
   void ServeConnection(int cfd) {
-    auto ctx = std::make_unique<SessionContext>();
+    auto ctx = std::make_shared<SessionContext>();
     ctx->fd  = cfd;
 
     if (tls_enabled_ && ssl_ctx_) {

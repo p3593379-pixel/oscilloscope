@@ -31,21 +31,6 @@ add_library(buf_connect_server STATIC
 #        src/services/admin_handler.cpp
 )
 
-add_library(buf_connect_server_proto_internal STATIC)
-
-protobuf_generate(
-        TARGET     buf_connect_server_proto_internal
-        LANGUAGE   cpp
-        PROTOS     ${CMAKE_CURRENT_SOURCE_DIR}/proto/buf_connect_server.proto
-        PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}
-        OUT_VAR    BCS_PROTO_SRCS
-)
-
-target_include_directories(buf_connect_server_proto_internal
-        PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_link_libraries(buf_connect_server_proto_internal PUBLIC protobuf::libprotobuf)
-
 target_include_directories(buf_connect_server
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -59,16 +44,18 @@ target_include_directories(buf_connect_server
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
 )
 
-target_link_directories(buf_connect_server PRIVATE
-        ${CMAKE_BINARY_DIR}/_deps/argon2-src
-)
+if(NOT CMAKE_CROSSCOMPILING)
+    target_link_directories(buf_connect_server PRIVATE
+            ${CMAKE_BINARY_DIR}/_deps/argon2-src
+    )
+endif()
 
 target_link_libraries(buf_connect_server
     PUBLIC
         buf_connect_server_proto_internal
         uuid
         argon2
-        nghttp2
+        nghttp2::nghttp2
         OpenSSL::SSL
         OpenSSL::Crypto
         spdlog::spdlog
@@ -79,6 +66,8 @@ target_link_libraries(buf_connect_server
         jwt-cpp::jwt-cpp
         httplib::httplib
 )
+
+add_subdirectory(proto)
 
 #if(BUILD_TESTING)
 #    enable_testing()

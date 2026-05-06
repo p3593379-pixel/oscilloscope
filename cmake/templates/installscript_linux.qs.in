@@ -1,0 +1,13 @@
+function Component()
+{
+    // default constructor
+}
+
+Component.prototype.createOperations = function()
+{
+    component.createOperations();
+    component.addElevatedOperation("Copy", "@TargetDir@/@APP_NAME@.svg", "/usr/share/icons/hicolor/scalable/apps/@APP_NAME@.svg");
+    component.addElevatedOperation("Copy", "@TargetDir@/@APP_NAME@.desktop", "/usr/share/applications/@APP_NAME@.desktop");
+    component.addElevatedOperation("Copy", "@TargetDir@/@APP_NAME@.desktop", "@HomeDir@/Desktop/@APP_NAME@.desktop");
+    component.addElevatedOperation("Execute", "{0}", "bash", "-c", "gtk-update-icon-cache /usr/share/icons/hicolor");
+}

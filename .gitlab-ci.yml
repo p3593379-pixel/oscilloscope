@@ -1,0 +1,147 @@
+cache:
+  paths: [ .vars ]
+
+stages:
+  - Base image stage
+#  - Unit testing
+  - Packaging
+  - Deploy
+  - Clean
+
+.build_base_image:
+  before_script:
+    - |
+      if [ "$BUILD_OS" = "astra" ]; then \
+        export BASE_IMAGE="docker.t8.ru/astra-se:1.7.3"; \
+      else \
+        export BASE_IMAGE="docker.t8.ru/ubuntu:20.04"; \
+      fi
+  script:
+    - docker build --force-rm -t ${CI_PROJECT_NAME}_build_image_base_${TARGET_ARCH}:${BUILD_OS} --build-arg BUILD_OS=${BUILD_OS} --build-arg TARGET_ARCH=${TARGET_ARCH} . -f docker/${CI_PROJECT_NAME}_build_image_base.Dockerfile
+  tags:
+    - build-server
+
+.build_prod_image:
+  before_script:
+    - docker build --force-rm -t ${CI_PROJECT_NAME}_build_image_${TARGET_ARCH}:${BUILD_OS} --build-arg BUILD_OS=${BUILD_OS} --build-arg TARGET_ARCH=${TARGET_ARCH} . -f docker/${CI_PROJECT_NAME}_build_image.Dockerfile
+  script:
+    - docker run --name ${CI_PROJECT_NAME}_build_${BUILD_OS}_${TARGET_ARCH}_${CI_PIPELINE_ID} --rm -itd ${CI_PROJECT_NAME}_build_image_${TARGET_ARCH}:${BUILD_OS}
+    - export OSCILLOSCOPE_VERSION=$(docker run --rm ${CI_PROJECT_NAME}_build_image_${TARGET_ARCH}:${BUILD_OS} bash -c "dpkg-deb -f /opt/${CI_PROJECT_NAME}/*.deb Version")
+    - docker cp ${CI_PROJECT_NAME}_build_${BUILD_OS}_${TARGET_ARCH}_${CI_PIPELINE_ID}:/opt/${CI_PROJECT_NAME}/${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION}-${BUILD_OS}-${TARGET_ARCH}.deb .
+  after_script:
+    - docker stop ${CI_PROJECT_NAME}_build_${BUILD_OS}_${TARGET_ARCH}_${CI_PIPELINE_ID}
+  tags:
+    - build-server
+  artifacts:
+    paths:
+      - ./*.deb
+    expire_in: 1 week
+
+.deploy_deb_pkg:
+  before_script:
+    - export GIT_COUNT=`git rev-list HEAD --count`
+    - export OSCILLOSCOPE_VERSION=$(docker run --rm ${CI_PROJECT_NAME}_build_image_${TARGET_ARCH}:${BUILD_OS} bash -c "dpkg-deb -f /opt/${CI_PROJECT_NAME}/*.deb Version")
+  tags:
+    - build-server
+  artifacts:
+    paths:
+      - ./*.deb
+    expire_in: 1 week
+
+
+#########################################
+######### Building base images ##########
+#########################################
+build_base_image:
+  stage: Base image stage
+  extends: .build_base_image
+  parallel:
+    matrix:
+      - BUILD_OS: [ubuntu, astra]
+        TARGET_ARCH: [x86, arm64]
+
+#########################################
+######### Building prod images ##########
+#########################################
+
+build_prod_image:
+  stage: Packaging
+  needs: ["build_base_image"]
+  extends: .build_prod_image
+  parallel:
+    matrix:
+      - BUILD_OS: [ubuntu, astra]
+        TARGET_ARCH: [x86, arm64]
+  variables:
+    GIT_SUBMODULE_STRATEGY: 'recursive'
+    GIT_SSL_NO_VERIFY: '1'
+
+#########################################
+######## Deploying deb packages #########
+#########################################
+dev:deploy_deb_pkg:
+  stage: Deploy
+  needs: [ "build_prod_image" ]
+  extends: .deploy_deb_pkg
+  parallel:
+    matrix:
+      - BUILD_OS: [ubuntu, astra]
+        TARGET_ARCH: [x86, arm64]
+  script:
+    - export OSCILLOSCOPE_VERSION_EXTENDED=${CI_COMMIT_REF_NAME}-${OSCILLOSCOPE_VERSION}-${GIT_COUNT}
+    - export PKG_NAME_BASE=${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION_EXTENDED}-${BUILD_OS}-${TARGET_ARCH}
+    - export PKG_NAME=${PKG_NAME_BASE}.deb
+    - mv ${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION}-${BUILD_OS}-${TARGET_ARCH}.deb ${PKG_NAME}
+    - export TARGET_DIR=/var/opt/packages/${CI_PROJECT_NAME}/dev/${CI_COMMIT_REF_NAME}/${BUILD_OS}/${TARGET_ARCH}/${PKG_NAME_BASE}
+    - mkdir -p -v ${TARGET_DIR}
+    - mv ${PKG_NAME} ${TARGET_DIR}
+  except:
+    - master
+    - tags
+
+master:deploy_deb_pkg:
+  stage: Deploy
+  needs: [ "build_prod_image" ]
+  extends: .deploy_deb_pkg
+  parallel:
+    matrix:
+      - BUILD_OS: [ubuntu, astra]
+        TARGET_ARCH: [x86, arm64]
+  script:
+    - export OSCILLOSCOPE_VERSION_EXTENDED=${CI_COMMIT_REF_NAME}-${OSCILLOSCOPE_VERSION}-${GIT_COUNT}
+    - export PKG_NAME=${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION_EXTENDED}-${BUILD_OS}-${TARGET_ARCH}.deb
+    - mv ${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION}-${BUILD_OS}-${TARGET_ARCH}.deb ${PKG_NAME}
+    - export TARGET_DIR=/var/opt/packages/${CI_PROJECT_NAME}/master/${BUILD_OS}/${TARGET_ARCH}/
+    - mkdir -p -v ${TARGET_DIR}
+    - mv ${PKG_NAME} ${TARGET_DIR}
+  only:
+    - master
+
+tags:deploy_deb_pkg:
+  stage: Deploy
+  needs: [ "build_prod_image" ]
+  extends: .deploy_deb_pkg
+  parallel:
+    matrix:
+      - BUILD_OS: [ubuntu, astra]
+        TARGET_ARCH: [x86, arm64]
+  script:
+    - export PKG_NAME=${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION}-${GIT_COUNT}-${BUILD_OS}-${TARGET_ARCH}.deb
+    - mv ${CI_PROJECT_NAME}-${OSCILLOSCOPE_VERSION}-${BUILD_OS}-${TARGET_ARCH}.deb ${PKG_NAME}
+    - export TARGET_DIR=/var/opt/packages/${CI_PROJECT_NAME}/release/${CI_COMMIT_TAG}/${BUILD_OS}/${TARGET_ARCH}/
+    - mkdir -p -v ${TARGET_DIR}
+    - mv ${PKG_NAME} ${TARGET_DIR}
+  only:
+    - tags
+
+clean:
+  stage: Clean
+  script:
+    - docker rmi --force ${CI_PROJECT_NAME}_build_image_${TARGET_ARCH}:${BUILD_OS}
+  when: always
+  parallel:
+    matrix:
+      - BUILD_OS: [ ubuntu, astra ]
+        TARGET_ARCH: [ x86, arm64 ]
+  tags:
+    - build-server

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Installer>
+    <Name>@APP_NAME@ Client</Name>
+    <Version>@PROJECT_VERSION@</Version>
+    <Title>@APP_NAME@ Client Installer</Title>
+    <Publisher>@APP_PUBLISHER@</Publisher>
+    <StartMenuDir>@APP_NAME@ Client</StartMenuDir>
+    <TargetDir>@HomeDir@/@INSTALL_PATH@</TargetDir>
+</Installer>
