@@ -57,13 +57,15 @@ import { useAuthStore }           from '@/entities/auth/authStore';
 // }
 
 export function useSession() {
-    const callToken       = useAuthStore(s => s.callToken);      // ← renamed from accessToken
+    const callToken       = useAuthStore(s => s.callToken);
     const isAuthenticated = useAuthStore(s => s.isAuthenticated);
+    const streamToken = useAuthStore(s => s.streamToken);
     const setStreamToken  = useAuthStore(s => s.setStreamToken);
     const abortRef        = useRef<AbortController | null>(null);
 
     useEffect(() => {
         if (!isAuthenticated || !callToken) return;
+        if (streamToken) return;
 
         const abort  = new AbortController();
         abortRef.current = abort;
@@ -95,5 +97,5 @@ export function useSession() {
 
         run();
         return () => abort.abort();
-    }, [callToken, setStreamToken]);
+    }, [callToken, isAuthenticated, setStreamToken, streamToken]);
 }

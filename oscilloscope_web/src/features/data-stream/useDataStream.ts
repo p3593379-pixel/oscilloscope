@@ -32,9 +32,12 @@ export function useDataStream(workerRef: RefObject<Worker | null>) {
   const workerRefRef = useRef(workerRef);
   workerRefRef.current = workerRef;
   const streamToken = useAuthStore(s => s.streamToken);
+  const streamTokenRef  = useRef(streamToken);
+  streamTokenRef.current = streamToken;           // always current, no re-run
 
   useEffect(() => {
-    if (!streamingEnabled || !streamToken) return;
+    if (!streamingEnabled) return;
+    if (!streamTokenRef.current) return;        // not ready yet, won't restart when it arrives
 
     // Snapshot frame parameters at start time — changing xShow while streaming
     // does NOT restart the connection; the viewport just scrolls into the buffer.
@@ -105,5 +108,5 @@ export function useDataStream(workerRef: RefObject<Worker | null>) {
     // streamingEnabled is the sole reconnect trigger.
     // xShow / targetFps are snapshotted at start — no restart needed for viewport changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamingEnabled, streamToken]);
+  }, [streamingEnabled]);
 }
