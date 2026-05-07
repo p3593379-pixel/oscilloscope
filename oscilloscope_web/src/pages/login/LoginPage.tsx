@@ -9,6 +9,7 @@ import { useLogin }          from '@/features/auth/useLogin';
 import { useTakeOver }       from '@/features/auth/useTakeOver';
 import { useAuthStore }      from '@/entities/auth/authStore';
 import styles                from './LoginPage.module.css';
+import logo from '../../../images/Logo.svg';
 
 type UiState = 'intro' | 'login' | 'login_outro' | 'done';
 
@@ -139,6 +140,7 @@ export function LoginPage() {
 
   return (
       <div className={styles.root}>
+        {!isNarrow && <img src={logo} alt="" className={styles.company_logo}/>}
         <SnakeLines
             ref={snakesRef}
             onOutroFinished={handleOutroFinished}

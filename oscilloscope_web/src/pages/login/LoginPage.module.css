@@ -4,7 +4,18 @@
   overflow: hidden;
 }
 
+.company_logo {
+  z-index: 1;
+  position: absolute;
+  top: 55%;
+  left: 55%;
+  transform: translate(-60%, -60%);
+  height: 45%;
+  background: transparent;
+}
+
 .formLayer {
+  z-index: 2;
   position: absolute;
   inset: 0;
   display: flex;
