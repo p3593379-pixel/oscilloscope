@@ -1,8 +1,10 @@
+// FILE: buf_connect_server/src/config/config_loader.cpp
 #include "buf_connect_server/config/server_config.hpp"
 #include "buf_connect_server/config/config_loader.hpp"
 
 #include <fstream>
 #include <string>
+#include <filesystem>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -15,9 +17,9 @@ namespace buf_connect_server {
     // -----------------------------------------------------------------------
     static void from_json(const json& j, TlsConfig& t) {
         t.enabled     = j.value("enabled",     false);
-        t.cert_path   = j.value("cert_path",   "");
-        t.key_path    = j.value("key_path",    "");
-        t.min_version = j.value("min_version", "TLSv1.2");
+        t.cert_path   = j.value("cert_path",   std::string{"/etc/nginx/ssl/oscilloscope-selfsigned.crt"});
+        t.key_path    = j.value("key_path",    std::string{"/etc/nginx/ssl/oscilloscope-selfsigned.key"});
+        t.min_version = j.value("min_version", std::string{"TLSv1.2"});
     }
 
     static void to_json(json& j, const TlsConfig& t) {
@@ -49,10 +51,22 @@ namespace buf_connect_server {
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
+
     ServerConfig ConfigLoader::LoadFromFile(const std::string& path) {
+        if (!std::filesystem::exists(path)) {
+            spdlog::info("Config file '{}' not found — creating with defaults", path);
+            ServerConfig defaults{};
+            try {
+                SaveToFile(defaults, path);
+            } catch (const std::exception& e) {
+                spdlog::warn("Could not write default config to '{}': {}", path, e.what());
+            }
+            return defaults;
+        }
+
         std::ifstream f(path);
         if (!f.is_open()) {
-            spdlog::warn("Config file '{}' not found — using defaults", path);
+            spdlog::warn("Config file '{}' could not be opened — using defaults", path);
             return ServerConfig{};
         }
         try {
@@ -65,6 +79,11 @@ namespace buf_connect_server {
     }
 
     void ConfigLoader::SaveToFile(const ServerConfig& config, const std::string& path) {
+        // Create parent directories if they don't exist yet
+        auto parent = std::filesystem::path(path).parent_path();
+        if (!parent.empty() && !std::filesystem::exists(parent))
+            std::filesystem::create_directories(parent);
+
         std::ofstream f(path);
         if (!f.is_open())
             throw std::runtime_error("Cannot open config file for writing: " + path);
@@ -93,15 +112,6 @@ namespace buf_connect_server {
                     s.value("grace_period_admin_seconds",     uint32_t{15});
             c.session.grace_period_engineer_seconds =
                     s.value("grace_period_engineer_seconds",  uint32_t{15});
-        }
-
-        // Streaming --------------------------------------------------------------
-        if (j.contains("streaming")) {
-            const auto& s = j["streaming"];
-            c.streaming.compression_enabled   =
-                    s.value("compression_enabled",   false);
-            c.streaming.compression_algorithm  =
-                    s.value("compression_algorithm", std::string{"zstd"});
         }
 
         // Log --------------------------------------------------------------------
@@ -141,10 +151,6 @@ namespace buf_connect_server {
                                           {"call_token_renew_period",        c.session.call_token_renew_period},
                                           {"grace_period_admin_seconds",     c.session.grace_period_admin_seconds},
                                           {"grace_period_engineer_seconds",  c.session.grace_period_engineer_seconds}
-                                  }},
-                {"streaming", {
-                                          {"compression_enabled",   c.streaming.compression_enabled},
-                                          {"compression_algorithm", c.streaming.compression_algorithm}
                                   }},
                 {"log", {
                                           {"level",                c.log.level},

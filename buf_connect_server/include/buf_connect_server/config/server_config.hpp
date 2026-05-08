@@ -7,8 +7,8 @@ namespace buf_connect_server {
 
     struct TlsConfig {
         bool        enabled     = false;
-        std::string cert_path;
-        std::string key_path;
+        std::string cert_path   = "/etc/nginx/ssl/oscilloscope-selfsigned.crt";
+        std::string key_path    = "/etc/nginx/ssl/oscilloscope-selfsigned.key";
         std::string min_version = "TLSv1.2";
     };
 
@@ -29,12 +29,6 @@ namespace buf_connect_server {
         uint32_t grace_period_engineer_seconds  = 15;
     };
 
-    struct StreamingConfig
-    {
-        bool        compression_enabled          = false;
-        std::string compression_algorithm        = "zstd";
-    };
-
     struct LogConfig {
         std::string level        = "info";
         std::string log_file_name_prefix = "buf_connect_server"; // e.g. buf_connect_server_1.log
@@ -50,10 +44,9 @@ namespace buf_connect_server {
     };
 
     struct ServerConfig {
-        InterfaceConfig control_plane {"0.0.0.0", 1254, true};
-        InterfaceConfig data_plane {"0.0.0.0", 1256, true};
+        InterfaceConfig control_plane {"127.0.0.3", 1254, true};
+        InterfaceConfig data_plane {"127.0.0.3", 1256, true};
         SessionConfig   session;
-        StreamingConfig streaming;
         LogConfig       log;
         MetricsConfig   metrics;
         std::string     user_db_path = "users.db";

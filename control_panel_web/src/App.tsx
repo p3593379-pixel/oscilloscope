@@ -1,46 +1,42 @@
 // FILE: control_panel_web/src/App.tsx
 import { useState } from 'react';
-import NetworkSettingsPanel   from './features/network/NetworkSettingsPanel';
-import StreamingSettingsPanel from './features/streaming/StreamingSettingsPanel';
-import SessionSettingsPanel   from './features/session/SessionSettingsPanel';
-import LogSettingsPanel       from './features/log/LogSettingsPanel';
-import MetricsSettingsPanel   from './features/metrics/MetricsSettingsPanel';
-import UserManagementPanel    from './features/users/UserManagementPanel';
-import { StatusPanel }        from './features/status/StatusPanel';
-import { configClient }       from './api/configClient';
+import NetworkSettingsPanel  from './features/network/NetworkSettingsPanel';
+import SessionsAndUsersPanel from './features/session/SessionsAndUsersPanel';
+import LogSettingsPanel      from './features/log/LogSettingsPanel';
+import MetricsPanel          from './features/metrics/MetricsPanel';
+import { configClient }      from './api/configClient';
 
 const TABS = [
-    { id: 'status',    label: 'Status'    },
-    { id: 'network',   label: 'Network'   },
-    { id: 'session',   label: 'Session'   },
-    { id: 'streaming', label: 'Streaming' },
-    { id: 'log',       label: 'Logging'   },
-    { id: 'metrics',   label: 'Metrics'   },
-    { id: 'users',     label: 'Users'     },
+    { id: 'network', label: 'Network'          },
+    { id: 'session', label: 'Sessions & Users' },
+    { id: 'log',     label: 'Logging'          },
+    { id: 'metrics', label: 'Metrics'          },
 ] as const;
 
 export type TabId = typeof TABS[number]['id'];
 
 export default function App() {
-    const [tab, setTab] = useState<TabId>('status');
+    const [tab, setTab] = useState<TabId>('network');
 
     return (
         <div style={{ fontFamily: 'system-ui, sans-serif', display: 'flex', height: '100vh' }}>
-            {/* Sidebar */}
             <nav style={{
-                width: 200, background: '#1e1e2e', color: '#cdd6f4',
-                display: 'flex', flexDirection: 'column', padding: '1rem 0',
+                width: 210, background: '#1e1e2e', color: '#cdd6f4',
+                display: 'flex', flexDirection: 'column', padding: '1rem 0', flexShrink: 0,
             }}>
                 <div style={{ padding: '0 1rem 1.5rem', fontWeight: 700, fontSize: 15, color: '#89b4fa' }}>
                     buf_connect
                 </div>
                 {TABS.map(t => (
                     <button key={t.id} onClick={() => setTab(t.id)} style={{
-                        background: tab === t.id ? '#313244' : 'transparent',
-                        color: tab === t.id ? '#cdd6f4' : '#a6adc8',
-                        border: 'none', borderLeft: tab === t.id ? '2px solid #89b4fa' : '2px solid transparent',
-                        textAlign: 'left', padding: '0.6rem 1rem',
-                        cursor: 'pointer', fontSize: 14,
+                        background:  tab === t.id ? '#313244' : 'transparent',
+                        color:       tab === t.id ? '#cdd6f4'  : '#a6adc8',
+                        border:      'none',
+                        borderLeft:  tab === t.id ? '2px solid #89b4fa' : '2px solid transparent',
+                        textAlign:   'left',
+                        padding:     '0.6rem 1rem',
+                        cursor:      'pointer',
+                        fontSize:    14,
                     }}>{t.label}</button>
                 ))}
                 <div style={{ flex: 1 }} />
@@ -56,21 +52,17 @@ export default function App() {
                                    if (!file) return;
                                    const result = await configClient.importConfig(file);
                                    if (result.error) alert('Import error: ' + result.error);
-                                   else alert('Config valid — apply via Save buttons in each tab');
+                                   else alert('Config imported and saved.');
                                }} />
                     </label>
                 </div>
             </nav>
 
-            {/* Main */}
             <main style={{ flex: 1, overflow: 'auto', background: '#1a1a2e', padding: '2rem', color: '#cdd6f4' }}>
-                {tab === 'status'    && <StatusPanel />}
-                {tab === 'network'   && <NetworkSettingsPanel />}
-                {tab === 'session'   && <SessionSettingsPanel />}
-                {tab === 'streaming' && <StreamingSettingsPanel />}
-                {tab === 'log'       && <LogSettingsPanel />}
-                {tab === 'metrics'   && <MetricsSettingsPanel />}
-                {tab === 'users'     && <UserManagementPanel />}
+                {tab === 'network' && <NetworkSettingsPanel />}
+                {tab === 'session' && <SessionsAndUsersPanel />}
+                {tab === 'log'     && <LogSettingsPanel />}
+                {tab === 'metrics' && <MetricsPanel />}
             </main>
         </div>
     );

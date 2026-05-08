@@ -22,6 +22,7 @@ add_library(buf_connect_server STATIC
         src/session/session_manager.cpp
         src/config/config_loader.cpp
         src/config/config_server.cpp
+        src/config/nginx_writer.cpp
         src/transport/control_plane.cpp
         src/transport/data_plane.cpp
         src/server.cpp

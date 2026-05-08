@@ -1,6 +1,7 @@
 // FILE: buf_connect_server/src/config/config_server.cpp
 #include "buf_connect_server/config/config_server.hpp"
 #include "buf_connect_server/config/config_loader.hpp"
+#include "buf_connect_server/config/nginx_writer.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -26,29 +27,46 @@ public:
     ServerConfig*          config_;
     auth::UserStore*       user_store_;
     std::string            static_dir_;
+    std::string            config_path_;       // NEW — path used for persistence
     ConfigUpdateCallback   on_update_;
     std::mutex             token_mutex_;
     std::unordered_map<std::string, DownloadEntry> download_tokens_;
     std::thread            thread_;
+    std::optional<NginxWriter> nginx_writer_;
 
-    // Live metrics counters (updated externally via callbacks / future API)
     std::atomic<uint64_t>  bytes_streamed_{0};
     std::atomic<uint32_t>  active_sessions_{0};
     std::atomic<uint64_t>  total_sessions_{0};
     std::atomic<uint32_t>  peak_sessions_{0};
     std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
+
+    // Persist current config to disk, then fire on_update_ callback.
+    // Safe to call from any PUT handler.
+    void persist() {
+        if (!config_path_.empty()) {
+            try {
+                ConfigLoader::SaveToFile(*config_, config_path_);
+            } catch (const std::exception& e) {
+                spdlog::error("ConfigServer: failed to save config to '{}': {}", config_path_, e.what());
+            }
+        }
+        if (on_update_) on_update_(*config_);
+    }
 };
 
 buf_connect_server::ConfigServer::ConfigServer(
-        ServerConfig* config,
-        auth::UserStore* user_store,
-        const std::string& static_dir,
-        ConfigUpdateCallback on_update) : impl_(std::make_unique<Impl>())
+        ServerConfig*          config,
+        auth::UserStore*       user_store,
+        const std::string&     static_dir,
+        ConfigUpdateCallback   on_update,
+        const std::string&     config_path)   // NEW parameter
+        : impl_(std::make_unique<Impl>())
 {
-    impl_->config_     = config;
-    impl_->user_store_ = user_store;
-    impl_->static_dir_ = static_dir;
-    impl_->on_update_  = std::move(on_update);
+    impl_->config_      = config;
+    impl_->user_store_  = user_store;
+    impl_->static_dir_  = static_dir;
+    impl_->config_path_ = config_path;
+    impl_->on_update_   = std::move(on_update);
 
     auto& svr = impl_->svr_;
 
@@ -66,14 +84,13 @@ buf_connect_server::ConfigServer::ConfigServer(
     // PUT /api/config  — replace full config
     svr.Put("/api/config", [this](const httplib::Request& req, httplib::Response& res) {
         try {
-            auto updated = ConfigLoader::FromJson(req.body);
+            auto updated    = ConfigLoader::FromJson(req.body);
             *impl_->config_ = updated;
-            if (impl_->on_update_) impl_->on_update_(updated);
+            impl_->persist();
             res.set_content(ConfigLoader::ToJson(updated), "application/json");
         } catch (const std::exception& e) {
             res.status = 400;
-            json err = {{"error", e.what()}};
-            res.set_content(err.dump(), "application/json");
+            res.set_content(json{{"error", e.what()}}.dump(), "application/json");
         }
     });
 
@@ -82,23 +99,21 @@ buf_connect_server::ConfigServer::ConfigServer(
     // -------------------------------------------------------------------------
     svr.Get("/api/config/network", [this](const httplib::Request&, httplib::Response& res) {
         auto full = json::parse(ConfigLoader::ToJson(*impl_->config_));
-        json j = {
-                {"control_plane", full["control_plane"]},
-                {"data_plane",    full["data_plane"]}
-        };
+        json j = {{"control_plane", full["control_plane"]},
+                  {"data_plane",    full["data_plane"]}};
         res.set_content(j.dump(), "application/json");
     });
 
-    // PUT /api/config/network — requires restart
+    // PUT /api/config/network — updates nginx config and reloads nginx
     svr.Put("/api/config/network", [this](const httplib::Request& req, httplib::Response& res) {
         try {
             auto j = json::parse(req.body);
             auto& c = *impl_->config_;
 
             auto patch_iface = [](const json& src, InterfaceConfig& dst) {
-                dst.bind_address = src.value("bind_address", dst.bind_address);
-                dst.port         = src.value("port",         dst.port);
-                dst.enabled      = src.value("enabled",      dst.enabled);
+                dst.bind_address    = src.value("bind_address", dst.bind_address);
+                dst.port            = src.value("port",         dst.port);
+                dst.enabled         = src.value("enabled",      dst.enabled);
                 if (src.contains("tls")) {
                     dst.tls.enabled     = src["tls"].value("enabled",     dst.tls.enabled);
                     dst.tls.cert_path   = src["tls"].value("cert_path",   dst.tls.cert_path);
@@ -110,19 +125,33 @@ buf_connect_server::ConfigServer::ConfigServer(
             if (j.contains("control_plane")) patch_iface(j["control_plane"], c.control_plane);
             if (j.contains("data_plane"))    patch_iface(j["data_plane"],    c.data_plane);
 
+            // Persist to JSON config file
             if (impl_->on_update_) impl_->on_update_(c);
+
+            // Write nginx config and reload
+            std::string nginx_err;
+            if (impl_->nginx_writer_) {
+                nginx_err = impl_->nginx_writer_->Apply(c.control_plane, c.data_plane);
+            }
 
             auto full = json::parse(ConfigLoader::ToJson(c));
             json resp = {
                     {"control_plane",    full["control_plane"]},
                     {"data_plane",       full["data_plane"]},
-                    {"restart_required", true}
+                    {"restart_required", false}          // nginx reload is hot — no backend restart needed
             };
-            res.status = 202;
+            if (!nginx_err.empty()) {
+                resp["nginx_error"] = nginx_err;
+                res.status = 202;  // config saved, but nginx reload failed — non-fatal
+            } else {
+                res.status = 200;
+            }
             res.set_content(resp.dump(), "application/json");
-        } catch (...) {
+
+        } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content("{\"error\":\"bad request\"}", "application/json");
+            json err = {{"error", e.what()}};
+            res.set_content(err.dump(), "application/json");
         }
     });
 
@@ -160,7 +189,8 @@ buf_connect_server::ConfigServer::ConfigServer(
             s.grace_period_engineer_seconds =
                     j.value("grace_period_engineer_seconds",  s.grace_period_engineer_seconds);
 
-            if (impl_->on_update_) impl_->on_update_(*impl_->config_);
+            impl_->persist();
+
             json resp = {
                     {"admin_conflict_timeout_seconds", s.admin_conflict_timeout_seconds},
                     {"snooze_duration_seconds",        s.snooze_duration_seconds},
@@ -177,52 +207,19 @@ buf_connect_server::ConfigServer::ConfigServer(
     });
 
     // -------------------------------------------------------------------------
-    // GET /api/config/streaming
-    // -------------------------------------------------------------------------
-    svr.Get("/api/config/streaming", [this](const httplib::Request&, httplib::Response& res) {
-        const auto& s = impl_->config_->streaming;
-        json j = {
-                {"compression_enabled",   s.compression_enabled},
-                {"compression_algorithm", s.compression_algorithm}
-        };
-        res.set_content(j.dump(), "application/json");
-    });
-
-    // PUT /api/config/streaming
-    svr.Put("/api/config/streaming", [this](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto j  = json::parse(req.body);
-            auto& s = impl_->config_->streaming;
-            s.compression_enabled   = j.value("compression_enabled",   s.compression_enabled);
-            s.compression_algorithm = j.value("compression_algorithm", s.compression_algorithm);
-            if (impl_->on_update_) impl_->on_update_(*impl_->config_);
-            json resp = {
-                    {"compression_enabled",   s.compression_enabled},
-                    {"compression_algorithm", s.compression_algorithm}
-            };
-            res.set_content(resp.dump(), "application/json");
-        } catch (...) {
-            res.status = 400;
-            res.set_content("{\"error\":\"bad request\"}", "application/json");
-        }
-    });
-
-    // -------------------------------------------------------------------------
     // GET /api/config/log
     // -------------------------------------------------------------------------
     svr.Get("/api/config/log", [this](const httplib::Request&, httplib::Response& res) {
         const auto& l = impl_->config_->log;
-        json j = {
-                {"level",                l.level},
-                {"log_file_name_prefix", l.log_file_name_prefix},
-                {"console",              l.console},
-                {"max_size_mb",          l.max_size_mb},
-                {"max_files",            l.max_files}
-        };
+        json j = {{"level",                l.level},
+                  {"log_file_name_prefix", l.log_file_name_prefix},
+                  {"console",              l.console},
+                  {"max_size_mb",          l.max_size_mb},
+                  {"max_files",            l.max_files}};
         res.set_content(j.dump(), "application/json");
     });
 
-    // PUT /api/config/log — applied immediately, no restart
+    // PUT /api/config/log
     svr.Put("/api/config/log", [this](const httplib::Request& req, httplib::Response& res) {
         try {
             auto j  = json::parse(req.body);
@@ -232,16 +229,12 @@ buf_connect_server::ConfigServer::ConfigServer(
             l.console              = j.value("console",              l.console);
             l.max_size_mb          = j.value("max_size_mb",          l.max_size_mb);
             l.max_files            = j.value("max_files",            l.max_files);
-            // Apply level change immediately
-            spdlog::set_level(spdlog::level::from_str(l.level));
-            if (impl_->on_update_) impl_->on_update_(*impl_->config_);
-            json resp = {
-                    {"level",                l.level},
-                    {"log_file_name_prefix", l.log_file_name_prefix},
-                    {"console",              l.console},
-                    {"max_size_mb",          l.max_size_mb},
-                    {"max_files",            l.max_files}
-            };
+            impl_->persist();
+            json resp = {{"level",                l.level},
+                         {"log_file_name_prefix", l.log_file_name_prefix},
+                         {"console",              l.console},
+                         {"max_size_mb",          l.max_size_mb},
+                         {"max_files",            l.max_files}};
             res.set_content(resp.dump(), "application/json");
         } catch (...) {
             res.status = 400;
@@ -254,11 +247,9 @@ buf_connect_server::ConfigServer::ConfigServer(
     // -------------------------------------------------------------------------
     svr.Get("/api/config/metrics", [this](const httplib::Request&, httplib::Response& res) {
         const auto& m = impl_->config_->metrics;
-        json j = {
-                {"enabled",                 m.enabled},
-                {"metrics_log_path",        m.metrics_log_path},
-                {"metrics_log_file_prefix", m.metrics_log_file_prefix}
-        };
+        json j = {{"enabled",                 m.enabled},
+                  {"metrics_log_path",        m.metrics_log_path},
+                  {"metrics_log_file_prefix", m.metrics_log_file_prefix}};
         res.set_content(j.dump(), "application/json");
     });
 
@@ -270,12 +261,10 @@ buf_connect_server::ConfigServer::ConfigServer(
             m.enabled                 = j.value("enabled",                 m.enabled);
             m.metrics_log_path        = j.value("metrics_log_path",        m.metrics_log_path);
             m.metrics_log_file_prefix = j.value("metrics_log_file_prefix", m.metrics_log_file_prefix);
-            if (impl_->on_update_) impl_->on_update_(*impl_->config_);
-            json resp = {
-                    {"enabled",                 m.enabled},
-                    {"metrics_log_path",        m.metrics_log_path},
-                    {"metrics_log_file_prefix", m.metrics_log_file_prefix}
-            };
+            impl_->persist();
+            json resp = {{"enabled",                 m.enabled},
+                         {"metrics_log_path",        m.metrics_log_path},
+                         {"metrics_log_file_prefix", m.metrics_log_file_prefix}};
             res.set_content(resp.dump(), "application/json");
         } catch (...) {
             res.status = 400;
@@ -284,27 +273,49 @@ buf_connect_server::ConfigServer::ConfigServer(
     });
 
     // -------------------------------------------------------------------------
-    // GET /api/metrics/live — live runtime metrics
+    // GET /api/config/userdb  — user_db_path (NEW)
+    // -------------------------------------------------------------------------
+    svr.Get("/api/config/userdb", [this](const httplib::Request&, httplib::Response& res) {
+        json j = {{"user_db_path", impl_->config_->user_db_path}};
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // PUT /api/config/userdb  — requires restart (NEW)
+    svr.Put("/api/config/userdb", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto j = json::parse(req.body);
+            impl_->config_->user_db_path = j.value("user_db_path", impl_->config_->user_db_path);
+            impl_->persist();
+            json resp = {{"user_db_path",     impl_->config_->user_db_path},
+                         {"restart_required", true}};
+            res.status = 202;
+            res.set_content(resp.dump(), "application/json");
+        } catch (...) {
+            res.status = 400;
+            res.set_content("{\"error\":\"bad request\"}", "application/json");
+        }
+    });
+
+    // -------------------------------------------------------------------------
+    // GET /api/metrics/live
     // -------------------------------------------------------------------------
     svr.Get("/api/metrics/live", [this](const httplib::Request&, httplib::Response& res) {
-        auto now     = std::chrono::steady_clock::now();
-        auto uptime  = std::chrono::duration_cast<std::chrono::seconds>(
-                now - impl_->start_time_).count();
+        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - impl_->start_time_).count();
         json j = {
-                {"uptime_seconds",   uptime},
-                {"active_sessions",  impl_->active_sessions_.load()},
-                {"total_sessions",   impl_->total_sessions_.load()},
-                {"peak_sessions",    impl_->peak_sessions_.load()},
-                {"bytes_streamed",   impl_->bytes_streamed_.load()},
-                {"active_streams",   impl_->active_sessions_.load()},
-                // RPS stub — replace with a real sliding-window counter
-                {"rps",              0.0}
+                {"uptime_seconds",  uptime},
+                {"active_sessions", impl_->active_sessions_.load()},
+                {"total_sessions",  impl_->total_sessions_.load()},
+                {"peak_sessions",   impl_->peak_sessions_.load()},
+                {"bytes_streamed",  impl_->bytes_streamed_.load()},
+                {"active_streams",  0},
+                {"rps",             0.0}
         };
         res.set_content(j.dump(), "application/json");
     });
 
     // -------------------------------------------------------------------------
-    // Users endpoints  (unchanged — kept verbatim)
+    // Users endpoints
     // -------------------------------------------------------------------------
     svr.Get("/api/users", [this](const httplib::Request&, httplib::Response& res) {
         if (!impl_->user_store_) {
@@ -315,13 +326,11 @@ buf_connect_server::ConfigServer::ConfigServer(
         auto users = impl_->user_store_->ListUsers();
         json arr   = json::array();
         for (const auto& u : users) {
-            arr.push_back({
-                                  {"user_id",    u.uuid},
-                                  {"username",   u.username},
-                                  {"role",       u.role},
-                                  {"created_at", u.created_at},
-                                  {"last_login", u.last_login}
-                          });
+            arr.push_back({{"user_id",    u.uuid},
+                           {"username",   u.username},
+                           {"role",       u.role},
+                           {"created_at", u.created_at},
+                           {"last_login", u.last_login}});
         }
         res.set_content(json{{"users", arr}}.dump(), "application/json");
     });
@@ -337,7 +346,8 @@ buf_connect_server::ConfigServer::ConfigServer(
             if (role != "admin" && role != "engineer") { res.status = 400; res.set_content("{\"error\":\"role must be admin or engineer\"}", "application/json"); return; }
             auto user = impl_->user_store_->CreateUser(uname, pwd, role);
             if (!user) { res.status = 409; res.set_content("{\"error\":\"username already exists\"}", "application/json"); return; }
-            json resp = {{"user_id", user->uuid}, {"username", user->username}, {"role", user->role}, {"created_at", user->created_at}, {"last_login", user->last_login}};
+            json resp = {{"user_id", user->uuid}, {"username", user->username},
+                         {"role", user->role}, {"created_at", user->created_at}, {"last_login", user->last_login}};
             res.set_content(resp.dump(), "application/json");
         } catch (...) { res.status = 400; res.set_content("{\"error\":\"bad request\"}", "application/json"); }
     });
@@ -367,17 +377,15 @@ buf_connect_server::ConfigServer::ConfigServer(
     svr.Get("/api/status", [this](const httplib::Request&, httplib::Response& res) {
         auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - impl_->start_time_).count();
-        json j = {
-                {"uptime_seconds",  uptime},
-                {"active_sessions", impl_->active_sessions_.load()},
-                {"bytes_streamed",  impl_->bytes_streamed_.load()},
-                {"version",         "0.1.0"}
-        };
+        json j = {{"uptime_seconds",  uptime},
+                  {"active_sessions", impl_->active_sessions_.load()},
+                  {"bytes_streamed",  impl_->bytes_streamed_.load()},
+                  {"version",         "0.1.0"}};
         res.set_content(j.dump(), "application/json");
     });
 
     // -------------------------------------------------------------------------
-    // GET /api/status/interfaces — system network interfaces (for IP picker)
+    // GET /api/status/interfaces
     // -------------------------------------------------------------------------
     svr.Get("/api/status/interfaces", [](const httplib::Request&, httplib::Response& res) {
         json arr = json::array();
@@ -389,12 +397,10 @@ buf_connect_server::ConfigServer::ConfigServer(
                 inet_ntop(AF_INET,
                           &reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr)->sin_addr,
                           addr_buf, sizeof(addr_buf));
-                arr.push_back({
-                                      {"name",       ifa->ifa_name},
-                                      {"status",     (ifa->ifa_flags & IFF_UP) ? "UP" : "DOWN"},
-                                      {"address",    addr_buf},
-                                      {"speed_mbps", 0}
-                              });
+                arr.push_back({{"name",       ifa->ifa_name},
+                               {"status",     (ifa->ifa_flags & IFF_UP) ? "UP" : "DOWN"},
+                               {"address",    addr_buf},
+                               {"speed_mbps", 0}});
             }
             freeifaddrs(ifaddr);
         }
@@ -409,15 +415,16 @@ buf_connect_server::ConfigServer::ConfigServer(
         res.set_content(ConfigLoader::ToJson(*impl_->config_), "application/json");
     });
 
+    // Import: validate, apply, and persist — previously only validated (dry-run)
     svr.Post("/api/config/import", [this](const httplib::Request& req, httplib::Response& res) {
         try {
-            auto validated = ConfigLoader::FromJson(req.body);
-            (void)validated; // dry-run only — caller applies via PUT /api/config
-            res.set_content("{\"valid\":true}", "application/json");
+            auto imported   = ConfigLoader::FromJson(req.body);
+            *impl_->config_ = imported;
+            impl_->persist();
+            res.set_content(ConfigLoader::ToJson(imported), "application/json");
         } catch (const std::exception& e) {
             res.status = 400;
-            json err = {{"error", e.what()}};
-            res.set_content(err.dump(), "application/json");
+            res.set_content(json{{"error", e.what()}}.dump(), "application/json");
         }
     });
 
@@ -453,6 +460,11 @@ void buf_connect_server::ConfigServer::Start(const std::string& host, uint16_t p
 void buf_connect_server::ConfigServer::Stop() {
     impl_->svr_.stop();
     if (impl_->thread_.joinable()) impl_->thread_.join();
+}
+
+void buf_connect_server::ConfigServer::SetNginxWriter(buf_connect_server::NginxWriter::Options opts)
+{
+    impl_->nginx_writer_.emplace(std::move(opts));
 }
 
 void buf_connect_server::ConfigServer::RegisterDownloadToken(

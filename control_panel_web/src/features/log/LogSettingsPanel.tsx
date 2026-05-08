@@ -1,6 +1,7 @@
 // FILE: control_panel_web/src/features/log/LogSettingsPanel.tsx
 import { useEffect, useState } from 'react';
 import { configClient, type LogConfig } from 'api/configClient';
+import {TogglePill} from "../../components/TogglePill.tsx";
 
 const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'critical', 'off'];
 
@@ -41,9 +42,16 @@ export default function LogSettingsPanel() {
             </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                <input type="checkbox" checked={cfg.console}
-                       onChange={e => setCfg({ ...cfg, console: e.target.checked })} />
-                <span style={{ fontSize: 14 }}>Log to console (stdout)</span>
+                <TogglePill
+                    id="console-toggle"
+                    checked={cfg.console}
+                    onChange={v => setCfg({ ...cfg, console: v })}
+                    label="Log to console (stdout)"
+                    description="Mirrors all log output to standard output. Useful in containerised or systemd-managed deployments."
+                />
+                {/*<input type="checkbox" checked={cfg.console}*/}
+                {/*       onChange={e => setCfg({ ...cfg, console: e.target.checked })} />*/}
+                {/*<span style={{ fontSize: 14 }}>Log to console (stdout)</span>*/}
             </label>
 
             <label style={{ display: 'block', marginBottom: 16 }}>

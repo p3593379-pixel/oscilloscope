@@ -8,44 +8,49 @@
 #include "buf_connect_server/connect/request.hpp"
 #include "buf_connect_server/connect/response_writer.hpp"
 #include <memory>
+#include <string>
 
 namespace buf_connect_server {
 
     class ServiceHandlerBase {
     public:
-        ServiceHandlerBase () = default;
+        ServiceHandlerBase()  = default;
         virtual ~ServiceHandlerBase() = default;
-        // Returns the fully-qualified service path prefix, e.g.
-        // "/oscilloscope_interface.v2.AuthService"
         [[nodiscard]] virtual std::string ServicePath() const = 0;
-        // Register all RPC routes onto the router
         virtual void RegisterRoutes(class BufConnectServer& server) = 0;
     };
 
     class BufConnectServer {
     public:
-        explicit BufConnectServer(ServerConfig config);
+        // Preferred entry point: load config from file (creates file with
+        // defaults if it doesn't exist), then construct the server.
+        static BufConnectServer FromFile(const std::string& config_path);
+
+        // Direct construction — config already in hand.
+        // config_path is optional; pass empty string for in-memory-only operation.
+        explicit BufConnectServer(ServerConfig config,
+                                  std::string  config_path = "");
         ~BufConnectServer();
 
         void RegisterService(std::shared_ptr<ServiceHandlerBase> handler);
 
-        auth::UserStore&           GetUserStore();
-        session::SessionManager&   GetSessionManager();
+        auth::UserStore&         GetUserStore();
+        session::SessionManager& GetSessionManager();
 
-        // Register a route on the control plane router
-        void RegisterControlRoute(const std::string& path,
-                                  std::function<void(const connect::ParsedConnectRequest&,
-                                                     connect::ConnectResponseWriter&)> handler);
+        void RegisterControlRoute(
+                const std::string& path,
+                std::function<void(const connect::ParsedConnectRequest&,
+                                   connect::ConnectResponseWriter&)> handler);
 
-        // Register a route on the data plane router
-        void RegisterDataRoute(const std::string& path,
-                               std::function<void(const connect::ParsedConnectRequest&,
-                                                  connect::ConnectResponseWriter&)> handler);
+        void RegisterDataRoute(
+                const std::string& path,
+                std::function<void(const connect::ParsedConnectRequest&,
+                                   connect::ConnectResponseWriter&)> handler);
 
         const ServerConfig& GetConfig() const;
 
         // Blocks until SIGTERM/SIGINT
-        void Start(const std::string & _jwt_secret);
+        void Start(const std::string& jwt_secret);
         void Stop();
 
     private:

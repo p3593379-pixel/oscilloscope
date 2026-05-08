@@ -7,13 +7,17 @@
 
 namespace buf_connect_server {
 
-class ConfigLoader {
- public:
-  static ServerConfig LoadFromFile(const std::string& path);
-  static void         SaveToFile(const ServerConfig& config, const std::string& path);
-  static ServerConfig FromJson(const std::string& json_str);
-  static std::string  ToJson(const ServerConfig& config);
-};
+    class ConfigLoader {
+    public:
+        // Load config from file.  If the file does not exist the compiled-in
+        // defaults are written to disk first, so the file is always present
+        // after the first launch.
+        static ServerConfig LoadFromFile(const std::string& path);
+
+        static void         SaveToFile(const ServerConfig& config, const std::string& path);
+        static ServerConfig FromJson(const std::string& json_str);
+        static std::string  ToJson(const ServerConfig& config);
+    };
 
 }  // namespace buf_connect_server
 

@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
     std::string jwt_secret = std::string(js ? js : "buba");
 
     // BufConnectServer owns the UserStore; db path comes from config
-    buf_connect_server::BufConnectServer server(config);
+    auto server = buf_connect_server::BufConnectServer::FromFile("config.json");
 
     // Pass jwt_secret so the data plane can validate stream tokens
     auto osc_service = std::make_shared<OscilloscopeServiceImpl>(jwt_secret);
