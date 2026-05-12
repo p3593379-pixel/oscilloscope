@@ -109,7 +109,7 @@ function InterfaceBlock({ title, cfg, onChange, options, showEnabledToggle }: {
                             checked={cfg.tls.enabled}
                             onChange={v => setTls({enabled: v})}
                             label="TLS"
-                            description="Leave off when behind a TLS-terminating proxy"
+                            description="Enable TLS termination"
                         />
                         <select value={cfg.tls.min_version}
                                 onChange={e => setTls({min_version: e.target.value})}

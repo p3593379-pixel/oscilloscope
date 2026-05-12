@@ -1,9 +1,8 @@
 syntax = "proto3";
 
-// Device-specific RPCs for the oscilloscope backend.
-// Auth / session / admin RPCs live in buf_connect_server.proto.
-
 package oscilloscope_interface.v2;
+
+import "google/protobuf/field_mask.proto";
 
 option java_multiple_files = true;
 
@@ -15,17 +14,74 @@ enum DecimationTier {
   DECIMATION_TIER_PREVIEW     = 2;
 }
 
-// ─── OscilloscopeService ──────────────────────────────────────────────────────
+enum TriggerMode {
+  TRIGGER_MODE_UNSPECIFIED = 0;
+  TRIGGER_MODE_AUTO        = 1;
+  TRIGGER_MODE_NORMAL      = 2;
+  TRIGGER_MODE_SINGLE      = 3;
+}
+
+enum TriggerEdge {
+  TRIGGER_EDGE_UNSPECIFIED = 0;
+  TRIGGER_EDGE_RISING      = 1;
+  TRIGGER_EDGE_FALLING     = 2;
+}
+
+enum Interpolation {
+  INTERPOLATION_UNSPECIFIED = 0;
+  INTERPOLATION_LINEAR      = 1;
+  INTERPOLATION_SINC        = 2;
+  INTERPOLATION_STEP        = 3;
+}
+
+// ─── Settings model ───────────────────────────────────────────────────────────
+
+// Trigger configuration (all fields optional in a delta update).
+message TriggerConfig {
+  TriggerMode  mode    = 1;
+  TriggerEdge  edge    = 2;
+  float        level_v = 3;   // volts
+  uint32       channel = 4;   // 0-based channel index
+}
+
+// Per-channel configuration. Repeated field index == channel index.
+message ChannelConfig {
+  bool  enabled         = 1;
+  float volts_per_div   = 2;
+  float vertical_offset = 3;
+}
+
+// Top-level settings bag sent to/from the server.
+message OscilloscopeSettings {
+  // Acquisition
+  uint32        sample_rate_hz      = 1;
+  uint32        frame_size_samples  = 2;
+  uint32        target_fps          = 3;
+  uint32        max_bandwidth_mbps  = 4;   // 0 = unlimited
+  Interpolation interpolation       = 5;
+  bool          persistence_enabled = 6;
+  float         persistence_decay   = 7;   // 0.0–1.0
+
+  // Trigger
+  TriggerConfig trigger = 8;
+
+  // Channels (index == channel number)
+  repeated ChannelConfig channels = 9;
+
+  // Display
+  bool natural_units = 10;
+  // 0 = dark | 1 = amber | 2 = green  (small enum kept inline for brevity)
+  uint32 display_theme  = 11;
+  float  grid_opacity   = 12;   // 0.0–1.0
+}
+
+// ─── RPC messages ─────────────────────────────────────────────────────────────
 
 message StreamDataRequest {
   DecimationTier requested_tier     = 1;
   uint32         max_bandwidth_mbps = 2;
   string         stream_token       = 3;
-  // Number of samples per channel in each streamed frame.
-  // 0 → server default (8192).
   uint32         frame_size         = 4;
-  // Target frame rate in frames-per-second.
-  // 0 → server default (30).
   uint32         target_fps         = 5;
 }
 
@@ -38,24 +94,34 @@ message DataChunk {
   uint32         channels        = 6;
 }
 
-message GetSettingsRequest  {}
+// GetSettings — no body, auth via bearer token in the Authorization header.
+message GetSettingsRequest {}
 
-message OscilloscopeSettings {
-  uint32 sample_rate_hz   = 1;
-  uint32 channels         = 2;
-  uint32 voltage_range_mv = 3;
-  uint32 trigger_level_mv = 4;
-  bool   trigger_enabled  = 5;
+message GetSettingsResponse {
+  OscilloscopeSettings settings = 1;
 }
 
-message GetSettingsResponse    { OscilloscopeSettings settings = 1; }
-message UpdateSettingsRequest  { OscilloscopeSettings settings = 1; }
-message UpdateSettingsResponse { OscilloscopeSettings settings = 1; }
+// SetSettings — only fields present in update_mask are applied.
+// The server returns the full settings state after the update.
+message SetSettingsRequest {
+  google.protobuf.FieldMask update_mask = 1;
+  OscilloscopeSettings      settings    = 2;
+}
+
+message SetSettingsResponse {
+  OscilloscopeSettings settings             = 1;
+  bool                 stream_restart_needed = 2;  // true if ADC pipeline must restart
+}
+
+// ─── Services ─────────────────────────────────────────────────────────────────
 
 service OscilloscopeService {
-  rpc StreamData(StreamDataRequest)           returns (stream DataChunk);
-  rpc GetSettings(GetSettingsRequest)         returns (GetSettingsResponse);
-  rpc UpdateSettings(UpdateSettingsRequest)   returns (UpdateSettingsResponse);
+  // Data plane (authenticated via stream_token inside the request message)
+  rpc StreamData(StreamDataRequest) returns (stream DataChunk);
+
+  // Control plane (authenticated via Bearer JWT in Authorization header)
+  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
+  rpc SetSettings(SetSettingsRequest) returns (SetSettingsResponse);
 }
 
 // ─── ArchiveService ───────────────────────────────────────────────────────────

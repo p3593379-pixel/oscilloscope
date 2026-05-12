@@ -4,6 +4,8 @@ import { useWaveformStore }      from '@/entities/waveform/waveformStore';
 import { useSettingsStore }      from '@/entities/oscilloscopeSettings/settingsStore';
 import { SessionMode, UserRole } from '@/generated/buf_connect_server_pb';
 import { OscWidget }             from '@/widgets/oscilloscope/OscWidget';
+import { useState }      from 'react';
+import { SettingsCurtain }       from '@/widgets/settings-curtain/SettingsCurtain';
 import styles                    from './OscilloscopePage.module.css';
 
 // ── SVG logo ──────────────────────────────────────────────────────────────────
@@ -66,7 +68,11 @@ const IconSignOut = () => (
 );
 
 // ── Menubar ───────────────────────────────────────────────────────────────────
-function Menubar() {
+interface MenubarProps {
+    onSettingsClick: () => void;
+}
+
+function Menubar({ onSettingsClick }: MenubarProps) {
     const navigate   = useNavigate();
     const role       = useAuthStore(s => s.role);
     const sessMode   = useAuthStore(s => s.sessionMode);
@@ -88,9 +94,16 @@ function Menubar() {
     return (
         <nav className={styles.menubar} aria-label="Application bar">
 
-            {/* ── Left: brand ── */}
+            {/* ── Left: brand + settings button ── */}
             <div className={styles.brand}>
-                <OscLogo/>
+                <button
+                    className={styles.settingsLogoBtn}
+                    onClick={onSettingsClick}
+                    aria-label="Open acquisition settings"
+                    title="Acquisition settings"
+                >
+                    <OscLogo />
+                </button>
                 <span className={styles.brandName}>Oscilloscope</span>
             </div>
 
@@ -147,11 +160,19 @@ function Menubar() {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export function OscilloscopePage() {
+    const [settingsOpen, setSettingsOpen] = useState(false);
+
     return (
         <div className={styles.page}>
-            <Menubar/>
+            <Menubar
+                onSettingsClick={() => setSettingsOpen(o => !o)}
+            />
+            <SettingsCurtain
+                open={settingsOpen}
+                onClose={() => setSettingsOpen(false)}
+            />
             <div className={styles.widgetShell}>
-                <OscWidget/>
+                <OscWidget />
             </div>
         </div>
     );

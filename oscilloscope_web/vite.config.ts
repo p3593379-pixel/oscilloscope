@@ -27,13 +27,15 @@ export default defineConfig({
     proxy: {
       // ── buf_connect_server built-in services (auth / session / admin) ──
       '/buf_connect_server.v2': {
-        target:       'http://oscilloscope.local',
-        changeOrigin: true,
+        target:       'https://192.168.30.28',
+        changeOrigin: false,
+        secure: false
       },
       // ── oscilloscope device-specific services ──────────────────────────
       '/oscilloscope_interface.v2': {
-        target:       'http://oscilloscope.local',
-        changeOrigin: true,
+        target:       'https://192.168.30.28',
+        changeOrigin: false,
+        secure: false
       },
     },
   },

@@ -26,7 +26,7 @@ namespace buf_connect_server {
         struct Options {
             std::filesystem::path conf_path         = "/etc/nginx/conf.d/oscilloscope.conf";
             std::string           server_name       = "my_oscilloscope";
-            std::string           static_root       = "./static/oscilloscope_web";
+            std::string           static_root       = "./static/oscilloscope_web/";
             std::string           nginx_reload_cmd  = "sudo /usr/sbin/nginx -s reload";
 
             // Internal h2c endpoints — never exposed to the outer network

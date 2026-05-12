@@ -14,6 +14,7 @@
 #include "buf_connect_server/config/nginx_writer.hpp"
 #include <spdlog/spdlog.h>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <stdexcept>
 #include <cstdlib>
@@ -62,11 +63,16 @@ namespace buf_connect_server {
     }
 
     std::string NginxWriter::MakeStaticLocation() const {
-        if (!opts_.static_root.empty()) {
+        auto static_root_str = opts_.static_root;
+        if (!static_root_str.empty()) {
+            if (static_root_str.starts_with("./")) {
+                static_root_str.erase(0, 1);
+                static_root_str = std::filesystem::current_path().string() + static_root_str;
+            }
             std::ostringstream o;
             o << "\n"
               << "    location / {\n"
-              << "        root      " << opts_.static_root << ";\n"
+              << "        root      " << static_root_str << ";\n"
               << "        try_files $uri $uri/ /index.html;\n"
               << "\n"
               << "        add_header Access-Control-Allow-Credentials \"true\"              always;\n"
@@ -84,11 +90,12 @@ namespace buf_connect_server {
                                              const std::string& locations) const {
         std::ostringstream o;
         o << "server {\n"
-          << "    listen " << iface.bind_address << ":" << iface.port << ";\n"
+          << "    listen " << iface.bind_address << ":" << 443
+          << (iface.tls.enabled ? " ssl" : "") << ";\n"
           << "    http2 on;\n\n"
           << "    server_name " << opts_.server_name << ";\n";
         if (iface.tls.enabled)
-            MakeTlsBlock(iface.tls);
+            o << MakeTlsBlock(iface.tls);
 
         o << "\n" << locations << "}\n";
         return o.str();

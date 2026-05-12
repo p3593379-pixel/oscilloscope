@@ -34,7 +34,7 @@ void OscilloscopeServiceImpl::RegisterRoutes(
                 HandleGetSettings(req, w);
             });
     server.RegisterControlRoute(
-            "/oscilloscope_interface.v2.OscilloscopeService/UpdateSettings",
+            "/oscilloscope_interface.v2.OscilloscopeService/SetSettings",
             [this](const c::ParsedConnectRequest& req, c::ConnectResponseWriter& w) {
                 HandleUpdateSettings(req, w);
             });
@@ -158,10 +158,10 @@ void OscilloscopeServiceImpl::HandleGetSettings(
         std::lock_guard<std::mutex> lock(settings_mutex_);
         auto* s = resp.mutable_settings();
         s->set_sample_rate_hz(sample_rate_hz_);
-        s->set_channels(channels_);
-        s->set_voltage_range_mv(voltage_range_mv_);
-        s->set_trigger_level_mv(trigger_level_mv_);
-        s->set_trigger_enabled(trigger_enabled_);
+//        s->set_channels(channels_);
+//        s->set_voltage_range_mv(voltage_range_mv_);
+//        s->set_trigger_level_mv(trigger_level_mv_);
+//        s->set_trigger_enabled(trigger_enabled_);
     }
     std::vector<uint8_t> out(resp.ByteSizeLong());
     resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
@@ -169,7 +169,7 @@ void OscilloscopeServiceImpl::HandleGetSettings(
     writer.WriteUnary(std::span<const uint8_t>(out));
 }
 
-// ─── UpdateSettings ──────────────────────────────────────────────────────────
+// ─── SetSettings ──────────────────────────────────────────────────────────
 
 void OscilloscopeServiceImpl::HandleUpdateSettings(
         const buf_connect_server::connect::ParsedConnectRequest& req,
@@ -183,7 +183,7 @@ void OscilloscopeServiceImpl::HandleUpdateSettings(
             body = {d.payload.begin(), d.payload.end()};
     }
 
-    oscilloscope_interface::v2::UpdateSettingsRequest update_req;
+    oscilloscope_interface::v2::SetSettingsRequest update_req;
     if (!update_req.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
         writer.SendHeaders(c::kHttpBadRequest, "application/json");
         writer.WriteError(std::string(c::kCodeInvalidArgument), "parse error");
@@ -194,13 +194,13 @@ void OscilloscopeServiceImpl::HandleUpdateSettings(
     {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         sample_rate_hz_   = s.sample_rate_hz();
-        channels_         = s.channels();
-        voltage_range_mv_ = s.voltage_range_mv();
-        trigger_level_mv_ = s.trigger_level_mv();
-        trigger_enabled_  = s.trigger_enabled();
+//        channels_         = s.channels();
+//        voltage_range_mv_ = s.voltage_range_mv();
+//        trigger_level_mv_ = s.trigger_level_mv();
+//        trigger_enabled_  = s.trigger_enabled();
     }
 
-    oscilloscope_interface::v2::UpdateSettingsResponse resp;
+    oscilloscope_interface::v2::SetSettingsResponse resp;
     *resp.mutable_settings() = s;
     std::vector<uint8_t> out(resp.ByteSizeLong());
     resp.SerializeToArray(out.data(), static_cast<int>(out.size()));

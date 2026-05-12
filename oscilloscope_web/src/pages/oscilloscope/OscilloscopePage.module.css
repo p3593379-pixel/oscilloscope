@@ -24,6 +24,19 @@
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
+/* Settings logo button — clickable, no decoration */
+.settingsLogoBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: 5px;
+    transition: background 140ms;
+}
+.settingsLogoBtn:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
 /* Brand (left) */
 .brand {
     display: flex;
