@@ -131,23 +131,29 @@
 
 /* ── Segmented ──────────────────────────────────────────────────────────────── */
 .segmented {
-    display: inline-flex;
+    display: flex;
+    height: 28px;
     border: 1px solid #d1d5db;
-    border-radius: 5px;
+    border-radius: 3px;
     overflow: hidden;
+    background: #e0e0e0;
+    flex-shrink: 0;
 }
 .seg {
     flex: 1;
-    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-    height: 26px; padding: 0 10px;
-    font-family: monospace; font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
-    color: #555; background: #f9fafb;
-    border-right: 1px solid #d1d5db;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    color: #3b3b3b;
+    font-family: monospace;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
     transition: background 120ms, color 120ms;
 }
-.seg:last-child { border-right: none; }
+.segBtn + .segBtn { border-left: 1px solid #c4c4c4; }
 .seg:hover:not(.segActive) { background: #f0f0f0; }
-.segActive { background: #1565c0; color: #fff; }
+.segActive { background: #1565c0; color: #fff; border: none; }
 
 /* ── Slider ─────────────────────────────────────────────────────────────────── */
 .slider {

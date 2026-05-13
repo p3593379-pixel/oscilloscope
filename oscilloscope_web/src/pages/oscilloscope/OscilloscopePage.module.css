@@ -161,9 +161,3 @@
 }
 .logoutBtn:hover { background: #ebebeb; border-color: #bbb; }
 
-/* Widget shell */
-.widgetShell {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-}

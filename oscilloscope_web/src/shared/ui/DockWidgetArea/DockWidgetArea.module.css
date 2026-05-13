@@ -1,0 +1,136 @@
+/* ── Outer shell ──────────────────────────────────────────────────────────── */
+.area {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: #f5f5f5;
+    display: flex;
+    isolation: isolate;
+}
+
+/* ── Pinned layout root ───────────────────────────────────────────────────── */
+.pinnedRoot {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    z-index: 0;
+    /* Smooth shrink from any side when a drop zone is hovered */
+    transition:
+            top    200ms cubic-bezier(0.16, 1, 0.3, 1),
+            left   200ms cubic-bezier(0.16, 1, 0.3, 1),
+            right  200ms cubic-bezier(0.16, 1, 0.3, 1),
+            bottom 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Split containers ─────────────────────────────────────────────────────── */
+.splitH {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+.splitV {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.splitChild {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+}
+
+/* ── Widget slot (leaf node) ──────────────────────────────────────────────── */
+.widgetSlot {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+}
+
+/* ── Splitter handle ──────────────────────────────────────────────────────── */
+.splitter {
+    flex-shrink: 0;
+    background: #d0d0d0;
+    z-index: 5;
+    transition: background 120ms;
+}
+.splitter:hover,
+.splitterActive { background: #1565c0; }
+.splitterH { width: 4px;  cursor: col-resize; }
+.splitterV { height: 4px; cursor: row-resize; }
+
+/* ── Drop zones — roll in from each edge ──────────────────────────────────── */
+/*
+  Each zone is position:absolute anchored to its edge.
+  "Roll in" = the zone slides out from the edge.
+  For left/right: we animate `width` from 0 → 60px.
+  For top/bottom: we animate `height` from 0 → 60px.
+  We use clip-path so the content (the tinted fill) also slides cleanly.
+  pointer-events:none always — drop detection is done in JS via coordinates.
+*/
+.dropZone {
+    position: absolute;
+    z-index: 200;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+/* Shared fill div inside each zone */
+.dropZoneFill {
+    position: absolute;
+    inset: 0;
+    background: rgba(21, 101, 192, 0.08);
+    border-style: solid;
+    border-color: rgba(21, 101, 192, 0.28);
+    transition: background 150ms, border-color 150ms;
+}
+
+.dropZoneOver .dropZoneFill {
+    background: rgba(21, 101, 192, 0.15);
+    border-color: rgba(21, 101, 192, 0.55);
+}
+
+/* ── Left: slides in from the left edge ── */
+.dropZoneLeft {
+    top: 0; left: 0; bottom: 0;
+    width: 0;
+    transition: width 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dropZoneLeft .dropZoneFill  { border-width: 0 1px 0 0; }
+.dropZoneLeft.dropZoneVisible { width: 60px; }
+
+/* ── Right: slides in from the right edge ── */
+.dropZoneRight {
+    top: 0; right: 0; bottom: 0;
+    width: 0;
+    transition: width 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dropZoneRight .dropZoneFill  { border-width: 0 0 0 1px; }
+.dropZoneRight.dropZoneVisible { width: 60px; }
+
+/* ── Top: slides in from the top edge ── */
+.dropZoneTop {
+    top: 0; left: 0; right: 0;
+    height: 0;
+    transition: height 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dropZoneTop .dropZoneFill    { border-width: 0 0 1px 0; }
+.dropZoneTop.dropZoneVisible  { height: 60px; }
+
+/* ── Bottom: slides in from the bottom edge ── */
+.dropZoneBottom {
+    bottom: 0; left: 0; right: 0;
+    height: 0;
+    transition: height 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dropZoneBottom .dropZoneFill   { border-width: 1px 0 0 0; }
+.dropZoneBottom.dropZoneVisible { height: 60px; }

@@ -6,6 +6,7 @@ import { SessionMode, UserRole } from '@/generated/buf_connect_server_pb';
 import { OscWidget }             from '@/widgets/oscilloscope/OscWidget';
 import { useState }      from 'react';
 import { SettingsCurtain }       from '@/widgets/settings-curtain/SettingsCurtain';
+import { DockWidget, DockWidgetArea } from '@/shared/ui';
 import styles                    from './OscilloscopePage.module.css';
 
 // ── SVG logo ──────────────────────────────────────────────────────────────────
@@ -158,22 +159,78 @@ function Menubar({ onSettingsClick }: MenubarProps) {
     );
 }
 
+// ── Stub widgets ──────────────────────────────────────────────────────────────
+function ChannelInfoStub() {
+    return (
+        <div style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#444' }}>
+            <div style={{ marginBottom: 6, fontWeight: 700, color: '#1565c0' }}>Channel Info</div>
+            <div>CH1 · 1 V/div</div>
+            <div>CH2 · 0.5 V/div</div>
+            <div style={{ marginTop: 8, color: '#aaa', fontSize: 10 }}>stub — drag title to move</div>
+        </div>
+    );
+}
+
+function TriggerStub() {
+    return (
+        <div style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#444' }}>
+            <div style={{ marginBottom: 6, fontWeight: 700, color: '#c62828' }}>Trigger</div>
+            <div>Mode · Auto</div>
+            <div>Source · CH1</div>
+            <div>Level · 0 V</div>
+            <div style={{ marginTop: 8, color: '#aaa', fontSize: 10 }}>stub — pin with 📌 button</div>
+        </div>
+    );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export function OscilloscopePage() {
     const [settingsOpen, setSettingsOpen] = useState(false);
 
     return (
         <div className={styles.page}>
-            <Menubar
-                onSettingsClick={() => setSettingsOpen(o => !o)}
-            />
+            <Menubar onSettingsClick={() => setSettingsOpen(o => !o)} />
             <SettingsCurtain
                 open={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
             />
-            <div className={styles.widgetShell}>
-                <OscWidget />
-            </div>
+
+            {/* Replace widgetShell div with DockWidgetArea */}
+            <DockWidgetArea>
+
+                <DockWidget
+                    title="Oscilloscope"
+                    initialX={10}
+                    initialY={10}
+                    initialWidth={700}
+                    initialHeight={480}
+                    defaultPinned
+                    defaultPinnedSide="left"
+                >
+                    <OscWidget />
+                </DockWidget>
+
+                <DockWidget
+                    title="Channel Info"
+                    initialX={730}
+                    initialY={10}
+                    initialWidth={220}
+                    initialHeight={160}
+                >
+                    <ChannelInfoStub />
+                </DockWidget>
+
+                <DockWidget
+                    title="Trigger"
+                    initialX={730}
+                    initialY={185}
+                    initialWidth={220}
+                    initialHeight={160}
+                >
+                    <TriggerStub />
+                </DockWidget>
+
+            </DockWidgetArea>
         </div>
     );
 }
