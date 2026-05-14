@@ -92,6 +92,11 @@ message GetStreamTokenResponse {
   string stream_token = 1;
 }
 
+message GetSpectrogramTokenRequest  {}
+message GetSpectrogramTokenResponse {
+  string spectrogram_token = 1;
+}
+
 message HeartbeatRequest {
   string session_id = 1;
 }
@@ -146,6 +151,7 @@ message ModeChangedEvent {
 service SessionService {
   rpc WatchSessionEvents  (WatchSessionEventsRequest) returns (stream SessionEvent);
   rpc GetStreamToken      (GetStreamTokenRequest)     returns (GetStreamTokenResponse);
+  rpc GetSpectrogramToken (GetSpectrogramTokenRequest) returns (GetSpectrogramTokenResponse);
   rpc Heartbeat           (HeartbeatRequest)          returns (HeartbeatResponse);
   rpc ClaimActiveRole     (ClaimActiveRoleRequest)    returns (ClaimActiveRoleResponse);
   rpc AdminConflict       (AdminConflictRequest)      returns (AdminConflictResponse);

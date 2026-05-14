@@ -27,13 +27,16 @@ struct StreamData {
 
 // Per-connection session
 struct SessionContext {
-  nghttp2_session*                               session  = nullptr;
-  int                                            fd       = -1;
-  SSL*                                           ssl      = nullptr;
-  buf_connect_server::http2::RequestHandler      handler;
-  std::unordered_map<int32_t, StreamData>        streams;
-  std::mutex                                     write_mutex;
-  std::atomic<bool>                              closed{false};
+    nghttp2_session*                               session  = nullptr;
+    int                                            fd       = -1;
+    SSL*                                           ssl      = nullptr;
+    buf_connect_server::http2::RequestHandler      handler;
+    std::unordered_map<int32_t, StreamData>        streams;
+    std::mutex                                     write_mutex;
+    std::condition_variable                        send_cv;
+    bool                                           send_pending = false;
+    std::atomic<bool>                              closed{false};
+    std::shared_ptr<SessionContext>                self;   // set after make_shared
 };
 
 // nghttp2 callbacks ─────────────────────────────────────────────────────────
@@ -87,139 +90,143 @@ static int on_data_chunk_recv_callback(nghttp2_session*, uint8_t,
   return 0;
 }
 
-static int on_request_recv(nghttp2_session* session, SessionContext* ctx, int32_t stream_id)
+static int on_request_recv(nghttp2_session*, SessionContext* ctx, int32_t stream_id)
 {
-    auto it = ctx->streams.find(stream_id);
-    if (it == ctx->streams.end()) return 0;
+    auto ctx_ref = ctx->self;  // shared_ptr — keeps ctx alive across threads
+
+    auto it = ctx_ref->streams.find(stream_id);
+    if (it == ctx_ref->streams.end()) return 0;
 
     auto& sd = it->second;
     sd.request.body = sd.body_buf;
 
-    // ── Shared state between header_fn and write_fn ──────────────────────────
-    // header_fn just collects. write_fn submits everything at once.
-    auto pending = std::make_shared<std::vector<std::pair<std::string,std::string>>>();
+    auto pending            = std::make_shared<std::vector<std::pair<std::string,std::string>>>();
     auto response_submitted = std::make_shared<bool>(false);
 
-    // ── header_fn: pure collector, never touches nghttp2 ────────────────────
     auto header_fn = [pending](const std::string& name, const std::string& value) {
         pending->emplace_back(name, value);
     };
 
-    // ── write_fn: submits headers + body in one atomic nghttp2 operation ─────
-    auto write_fn = [ctx, session, stream_id, pending, response_submitted](
+    auto write_fn = [ctx_ref, stream_id, pending, response_submitted](
             std::span<const uint8_t> data) -> bool {
-        if (ctx->closed) return false;
-        std::lock_guard<std::mutex> lock(ctx->write_mutex);
+        if (ctx_ref->closed) return false;
+        {
+            std::lock_guard<std::mutex> lock(ctx_ref->write_mutex);
 
-        if (!*response_submitted) {
-            // Build NV array from everything header_fn collected
-            std::vector<nghttp2_nv> nva;
-            nva.reserve(pending->size());
-            for (auto& [n, v] : *pending) {
-                nva.push_back({
-                                      reinterpret_cast<uint8_t*>(const_cast<char*>(n.data())),
-                                      reinterpret_cast<uint8_t*>(const_cast<char*>(v.data())),
-                                      n.size(), v.size(),
-                                      NGHTTP2_NV_FLAG_NO_INDEX
-                              });
-            }
-
-            if (data.empty()) {
-                // Headers-only response (e.g. streaming: headers sent before loop)
-                nghttp2_submit_response(session, stream_id,
-                                        nva.data(), nva.size(), nullptr);
-                *response_submitted = true;
-                return !ctx->closed.load();
-            }
-
-            // Copy body — the read_callback must outlive this call
-            struct BodyState {
-                std::vector<uint8_t> data;
-                size_t offset = 0;
-            };
-            auto* bs = new BodyState{{data.begin(), data.end()}, 0};
-
-            nghttp2_data_provider provider{};
-            provider.source.ptr = bs;
-            provider.read_callback = [](nghttp2_session*, int32_t,
-                                        uint8_t* buf, size_t length,
-                                        uint32_t* flags,
-                                        nghttp2_data_source* source,
-                                        void*) -> ssize_t {
-                auto* s = static_cast<BodyState*>(source->ptr);
-                size_t remaining = s->data.size() - s->offset;
-                size_t to_copy   = std::min(length, remaining);
-                std::memcpy(buf, s->data.data() + s->offset, to_copy);
-                s->offset += to_copy;
-                if (s->offset >= s->data.size()) {
-                    *flags |= NGHTTP2_DATA_FLAG_EOF;
-                    delete s;
+            if (!*response_submitted) {
+                std::vector<nghttp2_nv> nva;
+                nva.reserve(pending->size());
+                for (auto& [n, v] : *pending) {
+                    nva.push_back({
+                                          reinterpret_cast<uint8_t*>(const_cast<char*>(n.data())),
+                                          reinterpret_cast<uint8_t*>(const_cast<char*>(v.data())),
+                                          n.size(), v.size(),
+                                          NGHTTP2_NV_FLAG_NO_INDEX
+                                  });
                 }
-                return static_cast<ssize_t>(to_copy);
-            };
 
-            // Single call: headers + data provider together
-            nghttp2_submit_response(session, stream_id,
-                                    nva.data(), nva.size(), &provider);
-            *response_submitted = true;
+                if (data.empty()) {
+                    // Streaming: send HEADERS without END_STREAM using a
+                    // sentinel provider that emits zero bytes + NO_END_STREAM.
+                    struct SentinelState { bool done = false; };
+                    auto* ss = new SentinelState{};
+                    nghttp2_data_provider provider{};
+                    provider.source.ptr = ss;
+                    provider.read_callback = [](nghttp2_session*, int32_t,
+                                                uint8_t*, size_t,
+                                                uint32_t* flags,
+                                                nghttp2_data_source* source,
+                                                void*) -> ssize_t {
+                        auto* s = static_cast<SentinelState*>(source->ptr);
+                        if (!s->done) {
+                            s->done = true;
+                            *flags |= NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM;
+                            delete s;
+                        }
+                        return 0;
+                    };
+                    nghttp2_submit_response(ctx_ref->session, stream_id,
+                                            nva.data(), nva.size(), &provider);
+                    *response_submitted = true;
 
-        } else {
-            // Subsequent write_fn calls = streaming frames after headers were sent
-            // (WatchSessionEvents, StreamData)
-            struct BodyState {
-                nghttp2_data_provider provider{};
-                std::vector<uint8_t> data;
-                size_t offset = 0;
-            };
-            auto* bs = new BodyState{{}, {data.begin(), data.end()}, 0};
-
-            bs->provider.source.ptr = bs;
-            bs->provider.read_callback = [](nghttp2_session*, int32_t,
-                                        uint8_t* buf, size_t length,
-                                        uint32_t* flags,
-                                        nghttp2_data_source* source,
-                                        void*) -> ssize_t {
-                auto* s = static_cast<BodyState*>(source->ptr);
-                size_t remaining = s->data.size() - s->offset;
-                size_t to_copy   = std::min(length, remaining);
-                std::memcpy(buf, s->data.data() + s->offset, to_copy);
-                s->offset += to_copy;
-                if (s->offset >= s->data.size()) {
-                    *flags |= NGHTTP2_DATA_FLAG_EOF;
-                    delete s;
+                } else {
+                    // Unary: headers + body in one shot, END_STREAM on last byte.
+                    struct BodyState { std::vector<uint8_t> data; size_t offset = 0; };
+                    auto* bs = new BodyState{{data.begin(), data.end()}, 0};
+                    nghttp2_data_provider provider{};
+                    provider.source.ptr = bs;
+                    provider.read_callback = [](nghttp2_session*, int32_t,
+                                                uint8_t* buf, size_t length,
+                                                uint32_t* flags,
+                                                nghttp2_data_source* source,
+                                                void*) -> ssize_t {
+                        auto* s = static_cast<BodyState*>(source->ptr);
+                        size_t to_copy = std::min(length, s->data.size() - s->offset);
+                        std::memcpy(buf, s->data.data() + s->offset, to_copy);
+                        s->offset += to_copy;
+                        if (s->offset >= s->data.size()) {
+                            *flags |= NGHTTP2_DATA_FLAG_EOF;
+                            delete s;
+                        }
+                        return static_cast<ssize_t>(to_copy);
+                    };
+                    nghttp2_submit_response(ctx_ref->session, stream_id,
+                                            nva.data(), nva.size(), &provider);
+                    *response_submitted = true;
                 }
-                return static_cast<ssize_t>(to_copy);
-            };
 
-            nghttp2_submit_data(session, NGHTTP2_FLAG_NONE, stream_id, &bs->provider);
-            nghttp2_session_send(session);
+            } else {
+                // Streaming DATA frame — keep stream open.
+                struct BodyState {
+                    nghttp2_data_provider provider{};
+                    std::vector<uint8_t>  data;
+                    size_t                offset = 0;
+                };
+                auto* bs = new BodyState{{}, {data.begin(), data.end()}, 0};
+                bs->provider.source.ptr = bs;
+                bs->provider.read_callback = [](nghttp2_session*, int32_t,
+                                                uint8_t* buf, size_t length,
+                                                uint32_t* flags,
+                                                nghttp2_data_source* source,
+                                                void*) -> ssize_t {
+                    auto* s = static_cast<BodyState*>(source->ptr);
+                    size_t to_copy = std::min(length, s->data.size() - s->offset);
+                    std::memcpy(buf, s->data.data() + s->offset, to_copy);
+                    s->offset += to_copy;
+                    if (s->offset >= s->data.size()) {
+                        *flags |= NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM;
+                        delete s;
+                    }
+                    return static_cast<ssize_t>(to_copy);
+                };
+                nghttp2_submit_data(ctx_ref->session, NGHTTP2_FLAG_NONE,
+                                    stream_id, &bs->provider);
+                // No nghttp2_session_send here — send thread drains the queue
+            }
         }
-
-        return !ctx->closed.load();
+        // Wake the send thread
+        ctx_ref->send_pending = true;
+        ctx_ref->send_cv.notify_one();
+        return !ctx_ref->closed.load();
     };
 
     if (sd.request.is_streaming) {
-        // Streaming handler: run on its own thread so ServeConnection
-        // continues the recv loop and nghttp2_session_send keeps firing.
-        std::thread([sd = std::move(sd), write_fn, header_fn, ctx_shared = ctx]() mutable {
+        std::thread([sd = std::move(sd), write_fn, header_fn, ctx_ref]() mutable {
             buf_connect_server::connect::ConnectResponseWriter writer(write_fn, header_fn, true);
-            if (ctx_shared->handler) ctx_shared->handler(sd.request, writer);
+            if (ctx_ref->handler) ctx_ref->handler(sd.request, writer);
         }).detach();
     } else {
-
-        buf_connect_server::connect::ConnectResponseWriter writer(write_fn, header_fn, sd.request.is_streaming);
-
-        if (ctx->handler) {
-            ctx->handler(sd.request, writer);
-        }
+        buf_connect_server::connect::ConnectResponseWriter writer(write_fn, header_fn, false);
+        if (ctx_ref->handler)
+            ctx_ref->handler(sd.request, writer);
         else {
             writer.SendHeaders(buf_connect_server::connect::kHttpInternalError,
                                "application/json");
             writer.WriteError("internal", "no handler registered");
         }
     }
-    ctx->streams.erase(it);
-    // RST only on error — for clean streams nghttp2 closes via DATA+EOF flag
+
+    ctx_ref->streams.erase(it);
     return 0;
 }
 
@@ -255,14 +262,31 @@ static int on_frame_recv_callback(nghttp2_session* session,
 }
 
 static ssize_t send_callback(nghttp2_session*, const uint8_t* data, size_t length,
-                              int, void* user_data) {
-  auto* ctx = static_cast<SessionContext*>(user_data);
-  if (ctx->ssl) {
-    int n = SSL_write(ctx->ssl, data, static_cast<int>(length));
-    return n <= 0 ? NGHTTP2_ERR_CALLBACK_FAILURE : n;
-  }
-  ssize_t n = ::send(ctx->fd, data, length, MSG_NOSIGNAL);
-  return n < 0 ? NGHTTP2_ERR_CALLBACK_FAILURE : n;
+                             int, void* user_data) {
+    auto* ctx = static_cast<SessionContext*>(user_data);
+
+    // Log the HTTP/2 frame header (first 9 bytes) of every outgoing frame
+    if (length >= 9) {
+        uint32_t frame_len = (data[0] << 16) | (data[1] << 8) | data[2];
+        uint8_t  frame_type = data[3];
+        uint8_t  frame_flags = data[4];
+        uint32_t stream_id = ((data[5] & 0x7f) << 24) | (data[6] << 16)
+                             | (data[7] << 8) | data[8];
+        const char* type_name =
+                frame_type == 0 ? "DATA" :
+                frame_type == 1 ? "HEADERS" :
+                frame_type == 4 ? "SETTINGS" :
+                frame_type == 7 ? "GOAWAY" :
+                frame_type == 8 ? "WINDOW_UPDATE" : "OTHER";
+        bool end_stream = (frame_flags & 0x01) != 0;
+    }
+
+    if (ctx->ssl) {
+        int n = SSL_write(ctx->ssl, data, static_cast<int>(length));
+        return n <= 0 ? NGHTTP2_ERR_CALLBACK_FAILURE : n;
+    }
+    ssize_t n = ::send(ctx->fd, data, length, MSG_NOSIGNAL);
+    return n < 0 ? NGHTTP2_ERR_CALLBACK_FAILURE : n;
 }
 
 // Http2Listener::Impl ────────────────────────────────────────────────────────
@@ -296,64 +320,96 @@ class buf_connect_server::http2::Http2Listener::Impl {
     }
   }
 
-  void ServeConnection(int cfd) {
-    auto ctx = std::make_shared<SessionContext>();
-    ctx->fd  = cfd;
+    void ServeConnection(int cfd) {
+        auto ctx = std::make_shared<SessionContext>();
+        ctx->self = ctx;   // self-reference so lambdas can extend lifetime
+        ctx->fd   = cfd;
 
-    if (tls_enabled_ && ssl_ctx_) {
-      ctx->ssl = SSL_new(ssl_ctx_);
-      SSL_set_fd(ctx->ssl, cfd);
-      if (SSL_accept(ctx->ssl) <= 0) {
-        SSL_free(ctx->ssl);
+        if (tls_enabled_ && ssl_ctx_) {
+            ctx->ssl = SSL_new(ssl_ctx_);
+            SSL_set_fd(ctx->ssl, cfd);
+            if (SSL_accept(ctx->ssl) <= 0) {
+                SSL_free(ctx->ssl);
+                ::close(cfd);
+                return;
+            }
+        }
+
+        ctx->handler = handler_;
+
+        nghttp2_session_callbacks* cbs;
+        nghttp2_session_callbacks_new(&cbs);
+        nghttp2_session_callbacks_set_send_callback(cbs, send_callback);
+        nghttp2_session_callbacks_set_on_begin_headers_callback(cbs, on_begin_headers_callback);
+        nghttp2_session_callbacks_set_on_header_callback(cbs, on_header_callback);
+        nghttp2_session_callbacks_set_on_data_chunk_recv_callback(cbs, on_data_chunk_recv_callback);
+        nghttp2_session_callbacks_set_on_frame_recv_callback(cbs, on_frame_recv_callback);
+        nghttp2_session_server_new(&ctx->session, cbs, ctx.get());
+        nghttp2_session_callbacks_del(cbs);
+
+        {
+            std::lock_guard<std::mutex> lock(ctx->write_mutex);
+            nghttp2_settings_entry iv[] = {
+                    {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                    {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE,    65535}};
+            nghttp2_submit_settings(ctx->session, NGHTTP2_FLAG_NONE, iv, 2);
+            nghttp2_session_send(ctx->session);
+        }
+
+        // Send thread — sole caller of nghttp2_session_send after the preface
+        std::thread send_thread([ctx]() {
+            while (true) {
+                std::unique_lock<std::mutex> lock(ctx->write_mutex);
+                ctx->send_cv.wait(lock, [&]{
+                    return ctx->send_pending || ctx->closed.load();
+                });
+                if (ctx->closed) break;
+                ctx->send_pending = false;
+                nghttp2_session_send(ctx->session);
+            }
+        });
+
+        // Recv loop — mem_recv runs WITHOUT write_mutex so inline unary
+        // handlers can acquire it freely inside write_fn
+        std::vector<uint8_t> read_buf(65536);
+        while (!ctx->closed) {
+            ssize_t nread;
+            if (ctx->ssl)
+                nread = SSL_read(ctx->ssl, read_buf.data(),
+                                 static_cast<int>(read_buf.size()));
+            else
+                nread = ::recv(cfd, read_buf.data(), read_buf.size(), 0);
+
+            if (nread <= 0) { ctx->closed = true; break; }
+
+            int rv = nghttp2_session_mem_recv(ctx->session,
+                                              read_buf.data(),
+                                              static_cast<size_t>(nread));
+            if (rv < 0) { ctx->closed = true; break; }
+
+            // Signal send thread to flush any frames nghttp2 queued internally
+            // (SETTINGS ACK, WINDOW_UPDATE, etc.)
+            {
+                std::lock_guard<std::mutex> lock(ctx->write_mutex);
+                ctx->send_pending = true;
+            }
+            ctx->send_cv.notify_one();
+        }
+
+        ctx->closed = true;
+        ctx->send_cv.notify_all();
+        send_thread.join();
+
+        nghttp2_session_del(ctx->session);
+        ctx->session = nullptr;
+        if (ctx->ssl) { SSL_shutdown(ctx->ssl); SSL_free(ctx->ssl); ctx->ssl = nullptr; }
         ::close(cfd);
-        return;
-      }
+
+        // Break the self-reference cycle. Any detached streaming threads still
+        // holding ctx_ref will now hold the last references — they will see
+        // closed==true, exit their loops, and release the final shared_ptr.
+        ctx->self.reset();
     }
-
-    ctx->handler = handler_;
-
-    nghttp2_session_callbacks* cbs;
-    nghttp2_session_callbacks_new(&cbs);
-    nghttp2_session_callbacks_set_send_callback(cbs, send_callback);
-    nghttp2_session_callbacks_set_on_begin_headers_callback(
-        cbs, on_begin_headers_callback);
-    nghttp2_session_callbacks_set_on_header_callback(cbs, on_header_callback);
-    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
-        cbs, on_data_chunk_recv_callback);
-    nghttp2_session_callbacks_set_on_frame_recv_callback(
-        cbs, on_frame_recv_callback);
-
-    nghttp2_session_server_new(&ctx->session, cbs, ctx.get());
-    nghttp2_session_callbacks_del(cbs);
-
-    // Send server connection preface
-    nghttp2_settings_entry iv[] = {
-        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65535}};
-    nghttp2_submit_settings(ctx->session, NGHTTP2_FLAG_NONE, iv, 2);
-    nghttp2_session_send(ctx->session);
-
-    std::vector<uint8_t> read_buf(65536);
-    while (!ctx->closed) {
-      ssize_t nread;
-      if (ctx->ssl) {
-        nread = SSL_read(ctx->ssl, read_buf.data(),
-                         static_cast<int>(read_buf.size()));
-      } else {
-        nread = ::recv(cfd, read_buf.data(), read_buf.size(), 0);
-      }
-      if (nread <= 0) { ctx->closed = true; break; }
-      int rv = nghttp2_session_mem_recv(
-          ctx->session, read_buf.data(),
-          static_cast<size_t>(nread));
-      if (rv < 0) { ctx->closed = true; break; }
-      nghttp2_session_send(ctx->session);
-    }
-
-    nghttp2_session_del(ctx->session);
-    if (ctx->ssl) { SSL_shutdown(ctx->ssl); SSL_free(ctx->ssl); }
-    ::close(cfd);
-  }
 };
 
 buf_connect_server::http2::Http2Listener::Http2Listener(

@@ -11,6 +11,7 @@ interface AuthState {
   isAuthenticated: boolean;
   callToken:       string | null;
   streamToken:     string | null;
+  spectrogramToken: string | null;
   sessionId:       string | null;
   tokenExp:        number;
   role:            UserRole;
@@ -27,6 +28,7 @@ interface AuthState {
   }) => void;
   setCallToken:        (token: string) => void;
   setStreamToken:      (token: string) => void;
+  setSpectrogramToken: (token: string) => void;
   setSessionMode:      (mode: SessionMode) => void;
   setSessionConflict:  (info: SessionConflictInfo | null) => void;
   setLogoutReason:     (reason: string | null) => void;
@@ -37,6 +39,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: false,
   callToken:       null,
   streamToken:     null,
+  spectrogramToken: null,
   sessionId:       null,
   tokenExp:        0,
   role:            UserRole.UNSPECIFIED,
@@ -50,6 +53,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   setCallToken:     (token) => set({ callToken: token }),
   setStreamToken:     (token) => set({ streamToken: token }),
+  setSpectrogramToken: (token) => set({ spectrogramToken: token }),
   setSessionMode:     (mode)  => set({ sessionMode: mode }),
   setSessionConflict: (info)  => set({ sessionConflict: info }),
   setLogoutReason:    (reason) => set({ logoutReason: reason }),
@@ -58,6 +62,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     isAuthenticated: false,
     callToken:       null,
     streamToken:     null,
+    spectrogramToken: null,
     sessionId:       null,
     tokenExp:        0,
     role:            UserRole.UNSPECIFIED,

@@ -1,14 +1,18 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { useDataStream }              from '@/features/data-stream/useDataStream';
+import { useAuthStore }               from '@/entities/auth/authStore';
 import { useSettingsStore }           from '@/entities/oscilloscopeSettings/settingsStore';
 import styles                         from './OscilloscopeCanvas.module.css';
 
 interface Props {
-  /** Owned by OscWidget; passed here so the parent can also postMessage. */
   workerRef: RefObject<Worker | null>;
 }
 
-export function OscilloscopeCanvas({ workerRef }: Props) {
+// Inner component — only rendered when streamToken is guaranteed non-null.
+function OscilloscopeCanvasInner({
+                                   workerRef,
+                                   streamToken,
+                                 }: Props & { streamToken: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const {
@@ -16,7 +20,6 @@ export function OscilloscopeCanvas({ workerRef }: Props) {
     verticalOffset, channelVisible,
   } = useSettingsStore();
 
-  // Boot the OffscreenCanvas worker once on mount
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ref = canvasRef as any;
@@ -39,7 +42,6 @@ export function OscilloscopeCanvas({ workerRef }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Forward settings to worker whenever they change
   useEffect(() => {
     workerRef.current?.postMessage({
       type: 'settings', xStart, xShow, yPeakToPeak,
@@ -47,29 +49,32 @@ export function OscilloscopeCanvas({ workerRef }: Props) {
     });
   }, [xStart, xShow, yPeakToPeak, verticalOffset, channelVisible, workerRef]);
 
-  // Keep canvas pixel size in sync with CSS size
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ref = canvasRef as any;
     if (!ref.current) return;
     const ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      workerRef.current?.postMessage({
-        type: 'resize',
-        width:  Math.round(width),
-        height: Math.round(height),
-      });
+      workerRef.current?.postMessage({ type: 'resize',
+        width: Math.round(width), height: Math.round(height) });
     });
     ro.observe(ref.current);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useDataStream(workerRef);
+  useDataStream(workerRef, streamToken);
 
   return (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       <canvas ref={canvasRef as any} className={styles.canvas}
               aria-label="Oscilloscope waveform display" />
   );
+}
+
+// Outer shell — delays mount until token is ready.
+export function OscilloscopeCanvas({ workerRef }: Props) {
+  const streamToken = useAuthStore(s => s.streamToken);
+  if (!streamToken) return null;
+  return <OscilloscopeCanvasInner workerRef={workerRef} streamToken={streamToken} />;
 }

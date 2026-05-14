@@ -28,6 +28,7 @@ namespace buf_connect_server::services {
 
 //        void HandleWatchSessionEvents(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
         void HandleGetStreamToken(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
+        void HandleGetSpectrogramToken(const connect::ParsedConnectRequest&, connect::ConnectResponseWriter&);
 //        void HandleClaimActiveRole(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
 //        void HandleAdminConflict(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);
 //        void HandleHeartbeat(const connect::ParsedConnectRequest& req, connect::ConnectResponseWriter& w);

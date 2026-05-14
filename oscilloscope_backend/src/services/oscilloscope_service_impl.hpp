@@ -18,6 +18,8 @@ public:
 private:
     void HandleStreamData(const buf_connect_server::connect::ParsedConnectRequest&,
                           buf_connect_server::connect::ConnectResponseWriter&);
+    void HandleStreamSpectrogram(const buf_connect_server::connect::ParsedConnectRequest&,
+                                 buf_connect_server::connect::ConnectResponseWriter&);
     void HandleGetSettings(const buf_connect_server::connect::ParsedConnectRequest&,
                            buf_connect_server::connect::ConnectResponseWriter&);
     void HandleUpdateSettings(const buf_connect_server::connect::ParsedConnectRequest&,

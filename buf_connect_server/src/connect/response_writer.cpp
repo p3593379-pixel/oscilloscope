@@ -27,6 +27,7 @@ void buf_connect_server::connect::ConnectResponseWriter::SendHeaders(int status_
     }
     pending_headers_.clear();
     headers_sent_ = true;
+    write_fn_({});
 }
 
 void buf_connect_server::connect::ConnectResponseWriter::WriteUnary(std::span<const uint8_t> serialized_proto)

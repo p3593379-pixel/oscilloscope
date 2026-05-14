@@ -62,6 +62,22 @@ namespace buf_connect_server {
         return o.str();
     }
 
+//    static std::string ProxyBlock(const std::string& upstream) {
+//        std::ostringstream o;
+//        o << "        grpc_pass grpc://" << upstream << ";\n"
+//          << "\n"
+//          << "        grpc_set_header   Host $host;\n"
+//          << "\n"
+//          << "        grpc_buffer_size 1m;\n"
+//          << "\n"
+//          << "        grpc_read_timeout 3600s;\n"
+//          << "        grpc_send_timeout 3600s;\n"
+//          << "\n"
+//          << "        grpc_set_header X-Real-IP       $remote_addr;\n"
+//          << "        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n";
+//        return o.str();
+//    }
+
     std::string NginxWriter::MakeStaticLocation() const {
         auto static_root_str = opts_.static_root;
         if (!static_root_str.empty()) {
@@ -139,9 +155,9 @@ namespace buf_connect_server {
             control_plane_locations << "    location ~ ^/(buf_connect_server\\.v2\\.) {\n"
                                     << ProxyBlock("control_plane_h2c")
                                     << "    }\n"
-                                    << "    location ~ ^/(oscilloscope_interface\\.v2\\.) {\n"
+/*                                    << "    location ~ ^/(oscilloscope_interface\\.v2\\.) {\n"
                                     << ProxyBlock("control_plane_h2c")
-                                    << "    }\n";
+                                    << "    }\n"*/;
 
             std::ostringstream data_plane_locations;
             data_plane_locations << "    location ~ ^/(oscilloscope_interface\\.v2\\.) {\n"
@@ -157,9 +173,9 @@ namespace buf_connect_server {
             control_plane_locations << "    location ~ ^/(buf_connect_server\\.v2\\.) {\n"
                                     << ProxyBlock("control_plane_h2c")
                                     << "    }\n"
-                                    << "    location ~ ^/(oscilloscope_interface\\.v2\\.) {\n"
+/*                                    << "    location ~ ^/(oscilloscope_interface\\.v2\\.) {\n"
                                     << ProxyBlock("control_plane_h2c")
-                                    << "    }\n"
+                                    << "    }\n"*/
                                     << "    location ~ ^/(oscilloscope_interface\\.v2\\.) {\n"
                                     << ProxyBlock("data_plane_h2c")
                                     << "    }\n";

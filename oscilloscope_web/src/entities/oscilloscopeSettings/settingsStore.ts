@@ -5,6 +5,12 @@ export type TriggerEdge = 'RISING' | 'FALLING';
 export type ActiveTool  = 'none' | 'rectZoom' | 'vertZoom' | 'horZoom' | 'pan';
 
 interface OscilloscopeSettings {
+
+  // ── Spectrogram ──────────────────────────────────────────────────────────
+  spectrogramEnabled:  boolean;
+  spectrogramFftSize:  number;
+  spectrogramFps:      number;
+
   // ── Viewport ─────────────────────────────────────────────────────────────
   xStart:      number;   // -1 = live/auto-follow; ≥0 = offset from end (samples)
   xShow:       number;   // samples visible across the full canvas width
@@ -31,6 +37,9 @@ interface OscilloscopeSettings {
   naturalUnits: boolean;
 
   // ── Actions ───────────────────────────────────────────────────────────────
+  setSpectrogramEnabled: (v: boolean)  => void;
+  setSpectrogramFftSize: (n: number)   => void;
+  setSpectrogramFps:     (fps: number) => void;
   setXStart:            (v: number)       => void;
   setXShow:             (v: number)       => void;
   setYPeakToPeak:       (v: number)       => void;
@@ -50,6 +59,10 @@ interface OscilloscopeSettings {
 }
 
 export const useSettingsStore = create<OscilloscopeSettings>((set) => ({
+  spectrogramEnabled:  false,
+  spectrogramFftSize:  512,
+  spectrogramFps:      10,
+
   xStart:       -1,
   xShow:        8192,
   yPeakToPeak:  2.5,   // ±1.25 V, matches ±1 V sinewave amplitude with headroom
@@ -70,6 +83,9 @@ export const useSettingsStore = create<OscilloscopeSettings>((set) => ({
   activeTool:   'none',
   naturalUnits: false,
 
+  setSpectrogramEnabled: (v)   => set({ spectrogramEnabled: v }),
+  setSpectrogramFftSize: (n)   => set({ spectrogramFftSize: n }),
+  setSpectrogramFps:     (fps) => set({ spectrogramFps: fps }),
   setXStart:           (v)     => set({ xStart: v }),
   setXShow:            (v)     => set({ xShow: v }),
   setYPeakToPeak:      (v)     => set({ yPeakToPeak: v }),

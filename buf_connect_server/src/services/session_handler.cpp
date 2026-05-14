@@ -45,6 +45,12 @@ namespace buf_connect_server::services {
                        connect::ConnectResponseWriter& w) {
                     HandleGetStreamToken(req, w);
                 });
+        server.RegisterControlRoute(
+                "/buf_connect_server.v2.SessionService/GetSpectrogramToken",
+                [this](const connect::ParsedConnectRequest& req,
+                       connect::ConnectResponseWriter& w) {
+                    HandleGetSpectrogramToken(req, w);
+                });
 //        server.RegisterControlRoute(
 //                "/buf_connect_server.v2.SessionService/ClaimActiveRole",
 //                [this](const connect::ParsedConnectRequest& req,
@@ -216,7 +222,7 @@ namespace buf_connect_server::services {
         stream_token_claims.session_uuid = call_token_claims->session_uuid;
         auto now = std::chrono::system_clock::now();
         stream_token_claims.issued_at = now;
-        stream_token_claims.expires_at = now;
+        stream_token_claims.expires_at = now + std::chrono::hours(1);
         stream_token_claims.decimation_rate = 1.0;
         auto stream_token = stream_token_->Issue(stream_token_claims);
 
@@ -229,6 +235,53 @@ namespace buf_connect_server::services {
 
         _writer.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
                                  std::span<const uint8_t>(out));
+    }
+
+    void SessionHandler::HandleGetSpectrogramToken(
+            const connect::ParsedConnectRequest& req,
+            connect::ConnectResponseWriter& _writer)
+    {
+        namespace c = connect;
+        namespace a = buf_connect_server::auth;
+
+        auto call_token = c::ExtractAuthorizationBearer(req);
+        if (call_token.empty()) {
+            _writer.SendHeaders(c::kHttpUnauthorized, "application/json");
+            _writer.WriteError(std::string(c::kCodeUnauthenticated), "missing call token");
+            return;
+        }
+
+        auto call_token_claims = jwt_issuer_->Verify(call_token);
+        if (!call_token_claims || call_token_claims->type != "call_token") {
+            _writer.SendHeaders(c::kHttpUnauthorized, "application/json");
+            _writer.WriteError(std::string(c::kCodeUnauthenticated), "invalid call token");
+            return;
+        }
+
+        if (!mgr_.HasLiveSession(call_token_claims->user_uuid)) {
+            _writer.SendHeaders(c::kHttpUnauthorized, "application/json");
+            _writer.WriteError(std::string(c::kCodeUnauthenticated), "no live session");
+            return;
+        }
+
+        SPDLOG_INFO("Spectrogram token issued for session {}", call_token_claims->session_uuid);
+        a::StreamTokenClaims claims;
+        claims.session_uuid    = call_token_claims->session_uuid;
+        auto now               = std::chrono::system_clock::now();
+        claims.issued_at       = now;
+        claims.expires_at      = now + std::chrono::hours(1);
+        claims.decimation_rate = 1.0;
+        claims.type            = "spectrogram_stream";          // ← key difference
+
+        auto token = stream_token_->Issue(claims);
+
+        buf_connect_server::v2::GetSpectrogramTokenResponse resp;
+        resp.set_spectrogram_token(token);
+
+        std::vector<uint8_t> out(resp.ByteSizeLong());
+        resp.SerializeToArray(out.data(), static_cast<int>(out.size()));
+        _writer.SendUnaryResponse(c::kHttpOk, c::kContentTypeProto,
+                                  std::span<const uint8_t>(out));
     }
 
 // ---------------------------------------------------------------------------

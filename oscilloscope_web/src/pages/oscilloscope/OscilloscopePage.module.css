@@ -88,6 +88,34 @@
 }
 .streamBtnStop:hover { filter: brightness(1.1); }
 
+/* ── Stream button group (centre of menubar) ─────────────────────────────── */
+.streamBtnGroup {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Spectrogram start / stop — purple to distinguish from oscillogram */
+.specBtnStart {
+    background: #5b21b6;
+    color: #ffffff;
+}
+.specBtnStart:hover { filter: brightness(1.2); }
+
+.specBtnStop {
+    background: #7c3aed;
+    color: #ffffff;
+}
+.specBtnStop:hover { filter: brightness(1.1); }
+
+/* Thin separator between the two buttons */
+.btnGroupDivider {
+    width: 1px;
+    height: 18px;
+    background: #d4d4d4;
+    flex-shrink: 0;
+}
+
 /* Status area (right) */
 .statusArea {
     display: flex;

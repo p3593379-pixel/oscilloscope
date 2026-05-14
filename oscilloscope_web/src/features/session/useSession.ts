@@ -57,45 +57,34 @@ import { useAuthStore }           from '@/entities/auth/authStore';
 // }
 
 export function useSession() {
-    const callToken       = useAuthStore(s => s.callToken);
-    const isAuthenticated = useAuthStore(s => s.isAuthenticated);
-    const streamToken = useAuthStore(s => s.streamToken);
-    const setStreamToken  = useAuthStore(s => s.setStreamToken);
-    const abortRef        = useRef<AbortController | null>(null);
+    const callToken          = useAuthStore(s => s.callToken);
+    const isAuthenticated    = useAuthStore(s => s.isAuthenticated);
+    const setStreamToken     = useAuthStore(s => s.setStreamToken);
+    const setSpectrogramToken = useAuthStore(s => s.setSpectrogramToken);  // ← new
+    const abortRef           = useRef<AbortController | null>(null);
 
     useEffect(() => {
         if (!isAuthenticated || !callToken) return;
-        if (streamToken) return;
 
-        const abort  = new AbortController();
+        const abort = new AbortController();
         abortRef.current = abort;
-
-        const transport = makeControlTransport(callToken);
-        const client    = createClient(SessionService, transport);
 
         const run = async () => {
             try {
-                const { streamToken } = await client.getStreamToken({});
-                setStreamToken(streamToken);
-            } catch (e) {
-                console.warn('[useSession] getStreamToken failed:', e);
-            }
+                const client = createClient(SessionService, makeControlTransport(callToken));
 
-            // try {
-            //     for await (const event of client.watchSessionEvents(
-            //         {},
-            //         { signal: abort.signal }
-            //     )) {
-            //         applyEvent(event);
-            //     }
-            // } catch (e: unknown) {
-            //     if ((e as Error)?.name !== 'AbortError') {
-            //         console.error('[useSession] stream error:', e);
-            //     }
-            // }
+                const [streamResp, spectrogramResp] = await Promise.all([
+                    client.getStreamToken({}),
+                    client.getSpectrogramToken({}),     // ← new
+                ]);
+                setStreamToken(streamResp.streamToken);
+                setSpectrogramToken(spectrogramResp.spectrogramToken);  // ← new
+            } catch (e) {
+                console.warn('[useSession] token fetch failed:', e);
+            }
         };
 
         run();
         return () => abort.abort();
-    }, [callToken, isAuthenticated, setStreamToken, streamToken]);
+    }, [callToken, isAuthenticated, setStreamToken, setSpectrogramToken]);
 }

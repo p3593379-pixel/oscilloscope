@@ -13,6 +13,7 @@ namespace buf_connect_server::auth {
         std::chrono::system_clock::time_point issued_at;
         std::chrono::system_clock::time_point expires_at;
         double      decimation_rate = 1;
+        std::string type = "stream";          // ← new: "stream" | "spectrogram_stream"
     };
 
     class StreamToken {
@@ -21,7 +22,8 @@ namespace buf_connect_server::auth {
         explicit StreamToken(const std::string& jwt_secret);
 
         [[nodiscard]] std::string Issue(const StreamTokenClaims& claims) const;
-
+        [[nodiscard]] std::optional<StreamTokenClaims>
+        ValidateTyped(const std::string& token, const std::string& expected_type) const;
         // Returns nullopt if token is invalid, expired, or wrong type.
         [[nodiscard]] std::optional<StreamTokenClaims> Validate(const std::string& token) const;
 

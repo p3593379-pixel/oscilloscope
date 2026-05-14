@@ -1,12 +1,14 @@
 import { useNavigate }           from 'react-router';
 import { useAuthStore }          from '@/entities/auth/authStore';
 import { useWaveformStore }      from '@/entities/waveform/waveformStore';
+import { useSpectrogramStore } from '@/entities/spectrogram/spectrogramStore';
 import { useSettingsStore }      from '@/entities/oscilloscopeSettings/settingsStore';
 import { SessionMode, UserRole } from '@/generated/buf_connect_server_pb';
 import { OscWidget }             from '@/widgets/oscilloscope/OscWidget';
+import { SpectrogramWidget } from '@/widgets/spectrogram/SpectrogramWidget';
 import { useState }      from 'react';
 import { SettingsCurtain }       from '@/widgets/settings-curtain/SettingsCurtain';
-import { DockWidget, DockWidgetArea } from '@/shared/ui';
+import {DockWidget, DockWidgetArea, Spinner} from '@/shared/ui';
 import styles                    from './OscilloscopePage.module.css';
 
 // ── SVG logo ──────────────────────────────────────────────────────────────────
@@ -59,6 +61,13 @@ const IconStop = () => (
         <rect x="1.5" y="1.5" width="7" height="7" rx="1"/>
     </svg>
 );
+const IconSpectrum = () => (
+    <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+        <rect x="1"  y="7" width="2" height="4"/>
+        <rect x="4"  y="4" width="2" height="7"/>
+        <rect x="7"  y="1" width="2" height="10"/>
+    </svg>
+);
 const IconSignOut = () => (
     <svg width="14" height="14" viewBox="0 0 14 14"
          fill="none" stroke="currentColor" strokeWidth="1.6">
@@ -84,18 +93,21 @@ function Menubar({ onSettingsClick }: MenubarProps) {
     const frameCount   = useWaveformStore(s => s.frameCount);
     const channelCount = useWaveformStore(s => s.channelCount);
 
-    const streamingEnabled    = useSettingsStore(s => s.streamingEnabled);
-    const setStreamingEnabled = useSettingsStore(s => s.setStreamingEnabled);
-    const targetFps           = useSettingsStore(s => s.targetFps);
+    const streamingEnabled       = useSettingsStore(s => s.streamingEnabled);
+    const setStreamingEnabled    = useSettingsStore(s => s.setStreamingEnabled);
+    const spectrogramEnabled     = useSettingsStore(s => s.spectrogramEnabled);      // NEW
+    const setSpectrogramEnabled  = useSettingsStore(s => s.setSpectrogramEnabled);   // NEW
+    const targetFps              = useSettingsStore(s => s.targetFps);
+
+    const isSpecStreaming = useSpectrogramStore(s => s.isStreaming);                  // NEW
 
     const sessTxt = sessionLabel(sessMode);
-
-    const logout = () => { clearAuth(); navigate('/login', { replace: true }); };
+    const logout  = () => { clearAuth(); navigate('/login', { replace: true }); };
 
     return (
         <nav className={styles.menubar} aria-label="Application bar">
 
-            {/* ── Left: brand + settings button ── */}
+            {/* ── Left: brand + settings ── */}
             <div className={styles.brand}>
                 <button
                     className={styles.settingsLogoBtn}
@@ -108,40 +120,65 @@ function Menubar({ onSettingsClick }: MenubarProps) {
                 <span className={styles.brandName}>Oscilloscope</span>
             </div>
 
-            {/* ── Centre: start / stop ── */}
+            {/* ── Centre: stream controls ── */}
             <div className={styles.centre}>
-                <button
-                    className={`${styles.streamBtn} ${streamingEnabled ? styles.streamBtnStop : styles.streamBtnStart}`}
-                    onClick={() => setStreamingEnabled(!streamingEnabled)}
-                    title={streamingEnabled ? 'Stop streaming' : 'Start streaming'}
-                >
-                    {streamingEnabled ? <><IconStop/>&nbsp;Stop</> : <><IconPlay/>&nbsp;Start</>}
-                </button>
+                <div className={styles.streamBtnGroup}>
+
+                    {/* Oscillogram stream */}
+                    <button
+                        className={`${styles.streamBtn} ${streamingEnabled ? styles.streamBtnStop : styles.streamBtnStart}`}
+                        onClick={() => setStreamingEnabled(!streamingEnabled)}
+                        title={streamingEnabled ? 'Stop oscillogram stream' : 'Start oscillogram stream'}
+                    >
+                        {streamingEnabled
+                            ? <><IconStop />&nbsp;Osc</>
+                            : <><IconPlay />&nbsp;Osc</>}
+                    </button>
+
+                    <div className={styles.btnGroupDivider} />
+
+                    {/* Spectrogram stream */}
+                    <button
+                        className={`${styles.streamBtn} ${spectrogramEnabled ? styles.specBtnStop : styles.specBtnStart}`}
+                        onClick={() => setSpectrogramEnabled(!spectrogramEnabled)}
+                        title={spectrogramEnabled ? 'Stop spectrogram stream' : 'Start spectrogram stream'}
+                    >
+                        {spectrogramEnabled
+                            ? <><IconStop />&nbsp;Spec</>
+                            : <><IconSpectrum />&nbsp;Spec</>}
+                    </button>
+
+                </div>
             </div>
 
             {/* ── Right: telemetry + session ── */}
             <div className={styles.statusArea}>
 
-                {/* Live / stopped indicator */}
                 <span className={`${styles.pill} ${isStreaming ? styles.pillLive : styles.pillStopped}`}>
                     <span className={isStreaming ? styles.liveDot : styles.stoppedDot}/>
                     {isStreaming ? 'LIVE' : 'STOPPED'}
                 </span>
+
+                {/* Spectrogram live indicator — only shown when it's streaming */}
+                {isSpecStreaming && (
+                    <span className={`${styles.pill} ${styles.pillLive}`}
+                          style={{ borderColor: '#c4b5fd', background: '#ede9fe', color: '#5b21b6' }}>
+                        <span className={styles.liveDot} style={{ background: '#7c3aed' }}/>
+                        SPEC
+                    </span>
+                )}
 
                 {sampleRate > 0 && (
                     <span className={styles.stat}>
                         f<sub>s</sub>&nbsp;{fmtRate(sampleRate)}
                     </span>
                 )}
-
                 {channelCount > 0 && (
                     <span className={styles.stat}>CH&thinsp;×&thinsp;{channelCount}</span>
                 )}
-
                 {frameCount > 0 && (
                     <span className={styles.stat}>{frameCount.toLocaleString()}&thinsp;fr</span>
                 )}
-
                 <span className={styles.stat}>{targetFps}&thinsp;fps</span>
 
                 <div className={styles.divider}/>
@@ -160,32 +197,34 @@ function Menubar({ onSettingsClick }: MenubarProps) {
 }
 
 // ── Stub widgets ──────────────────────────────────────────────────────────────
-function ChannelInfoStub() {
-    return (
-        <div style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#444' }}>
-            <div style={{ marginBottom: 6, fontWeight: 700, color: '#1565c0' }}>Channel Info</div>
-            <div>CH1 · 1 V/div</div>
-            <div>CH2 · 0.5 V/div</div>
-            <div style={{ marginTop: 8, color: '#aaa', fontSize: 10 }}>stub — drag title to move</div>
-        </div>
-    );
-}
+// function ChannelInfoStub() {
+//     return (
+//         <div style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#444' }}>
+//             <div style={{ marginBottom: 6, fontWeight: 700, color: '#1565c0' }}>Channel Info</div>
+//             <div>CH1 · 1 V/div</div>
+//             <div>CH2 · 0.5 V/div</div>
+//             <div style={{ marginTop: 8, color: '#aaa', fontSize: 10 }}>stub — drag title to move</div>
+//         </div>
+//     );
+// }
 
-function TriggerStub() {
-    return (
-        <div style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#444' }}>
-            <div style={{ marginBottom: 6, fontWeight: 700, color: '#c62828' }}>Trigger</div>
-            <div>Mode · Auto</div>
-            <div>Source · CH1</div>
-            <div>Level · 0 V</div>
-            <div style={{ marginTop: 8, color: '#aaa', fontSize: 10 }}>stub — pin with 📌 button</div>
-        </div>
-    );
-}
+// function TriggerStub() {
+//     return (
+//         <div style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#444' }}>
+//             <div style={{ marginBottom: 6, fontWeight: 700, color: '#c62828' }}>Trigger</div>
+//             <div>Mode · Auto</div>
+//             <div>Source · CH1</div>
+//             <div>Level · 0 V</div>
+//             <div style={{ marginTop: 8, color: '#aaa', fontSize: 10 }}>stub — pin with 📌 button</div>
+//         </div>
+//     );
+// }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export function OscilloscopePage() {
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const spectrogramToken = useAuthStore(s => s.spectrogramToken);
+    if (!spectrogramToken) return <Spinner />;
 
     return (
         <div className={styles.page}>
@@ -211,24 +250,36 @@ export function OscilloscopePage() {
                 </DockWidget>
 
                 <DockWidget
-                    title="Channel Info"
+                    title="Spectrogram"
                     initialX={730}
                     initialY={10}
-                    initialWidth={220}
-                    initialHeight={160}
+                    initialWidth={500}
+                    initialHeight={300}
+                    defaultPinned
+                    defaultPinnedSide="right"
                 >
-                    <ChannelInfoStub />
+                    <SpectrogramWidget />
                 </DockWidget>
 
-                <DockWidget
-                    title="Trigger"
-                    initialX={730}
-                    initialY={185}
-                    initialWidth={220}
-                    initialHeight={160}
-                >
-                    <TriggerStub />
-                </DockWidget>
+                {/*<DockWidget*/}
+                {/*    title="Channel Info"*/}
+                {/*    initialX={730}*/}
+                {/*    initialY={10}*/}
+                {/*    initialWidth={220}*/}
+                {/*    initialHeight={160}*/}
+                {/*>*/}
+                {/*    <ChannelInfoStub />*/}
+                {/*</DockWidget>*/}
+
+                {/*<DockWidget*/}
+                {/*    title="Trigger"*/}
+                {/*    initialX={730}*/}
+                {/*    initialY={185}*/}
+                {/*    initialWidth={220}*/}
+                {/*    initialHeight={160}*/}
+                {/*>*/}
+                {/*    <TriggerStub />*/}
+                {/*</DockWidget>*/}
 
             </DockWidgetArea>
         </div>

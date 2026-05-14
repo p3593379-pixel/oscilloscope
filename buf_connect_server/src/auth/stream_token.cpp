@@ -42,29 +42,36 @@ std::string buf_connect_server::auth::StreamToken::Issue(const StreamTokenClaims
             .set_issued_at(claims.issued_at)
             .set_expires_at(claims.expires_at)
             .set_payload_claim("decimation_rate", jwt::claim(std::to_string(claims.decimation_rate)))
-            .set_payload_claim("type", jwt::claim(std::string("stream")))
+            .set_payload_claim("type", jwt::claim(claims.type))
             .sign(jwt::algorithm::hs256{derived_key_});
 }
 
 std::optional<buf_connect_server::auth::StreamTokenClaims>
-buf_connect_server::auth::StreamToken::Validate(const std::string& token) const
+buf_connect_server::auth::StreamToken::ValidateTyped(
+        const std::string& token, const std::string& expected_type) const
 {
     try {
         auto verifier = jwt::verify()
                 .allow_algorithm(jwt::algorithm::hs256{derived_key_})
                 .leeway(std::chrono::seconds(5).count());
         auto decoded = jwt::decode(token);
-//        verifier.verify(decoded);
-        auto type_str = decoded.get_payload_claim("type").as_string();
-        if (decoded.get_payload_claim("type").as_string() != "stream")
+        // verifier.verify(decoded);   // uncomment when expiry enforcement is wanted
+        if (decoded.get_payload_claim("type").as_string() != expected_type)
             return std::nullopt;
         StreamTokenClaims c;
-        c.session_uuid  = decoded.get_subject();
-        c.decimation_rate = std::stof(decoded.get_payload_claim("decimation_rate").as_string());
-        c.issued_at  = decoded.get_issued_at();
-        c.expires_at  = decoded.get_expires_at();
+        c.session_uuid    = decoded.get_subject();
+        c.decimation_rate = std::stod(decoded.get_payload_claim("decimation_rate").as_string());
+        c.issued_at       = decoded.get_issued_at();
+        c.expires_at      = decoded.get_expires_at();
+        c.type            = expected_type;
         return c;
     } catch (...) {
         return std::nullopt;
     }
+}
+
+std::optional<buf_connect_server::auth::StreamTokenClaims>
+buf_connect_server::auth::StreamToken::Validate(const std::string& token) const
+{
+    return ValidateTyped(token, "stream");
 }

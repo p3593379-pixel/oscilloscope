@@ -94,6 +94,27 @@ message DataChunk {
   uint32         channels        = 6;
 }
 
+// ─── Spectrogram stream ───────────────────────────────────────────────────────
+
+message StreamSpectrogramRequest {
+  string spectrogram_token       = 1;   // same auth mechanism as StreamDataRequest
+  uint32 fft_size           = 2;   // 0 → server default (512)
+  uint32 target_fps         = 3;   // 0 → server default (10)
+}
+
+// One spectrogram frame: magnitudes_db contains `channels * (fft_size/2 + 1)`
+// floats, interleaved by bin: BIN0_CH0, BIN0_CH1, BIN1_CH0, BIN1_CH1, ...
+// This mirrors the oscillogram's interleaved-by-sample convention.
+message SpectrogramChunk {
+  bytes  magnitudes_db    = 1;   // interleaved float32, dBFS
+  uint64 sequence_number  = 2;
+  uint64 timestamp_ns     = 3;
+  uint32 fft_size         = 4;   // = N; bins = N/2 + 1
+  float  freq_resolution_hz = 5; // sample_rate_hz / fft_size
+  uint32 sample_rate_hz   = 6;
+  uint32 channels         = 7;
+}
+
 // GetSettings — no body, auth via bearer token in the Authorization header.
 message GetSettingsRequest {}
 
@@ -118,6 +139,7 @@ message SetSettingsResponse {
 service OscilloscopeService {
   // Data plane (authenticated via stream_token inside the request message)
   rpc StreamData(StreamDataRequest) returns (stream DataChunk);
+  rpc StreamSpectrogram(StreamSpectrogramRequest) returns (stream SpectrogramChunk);
 
   // Control plane (authenticated via Bearer JWT in Authorization header)
   rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
