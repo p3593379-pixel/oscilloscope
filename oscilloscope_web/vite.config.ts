@@ -24,6 +24,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: '192.168.30.28',
     proxy: {
       // ── buf_connect_server built-in services (auth / session / admin) ──
       '/buf_connect_server.v2': {
@@ -35,7 +36,7 @@ export default defineConfig({
       '/oscilloscope_interface.v2': {
         target:       'https://192.168.30.28',
         changeOrigin: false,
-        secure: false
+        secure: true
       },
     },
   },

@@ -88,7 +88,7 @@ export function useSpectrogramStream(
                     specStore.setMeta({
                         fftSize:          chunk.fftSize,
                         freqResolutionHz: chunk.freqResolutionHz,
-                        sampleRateHz:     chunk.sampleRateHz,
+                        sampleRateHz:     Number(chunk.sampleRateHz),
                         channelCount:     numChannels,
                     });
 

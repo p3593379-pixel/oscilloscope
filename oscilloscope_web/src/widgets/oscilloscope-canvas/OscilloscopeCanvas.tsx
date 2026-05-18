@@ -8,7 +8,6 @@ interface Props {
   workerRef: RefObject<Worker | null>;
 }
 
-// Inner component — only rendered when streamToken is guaranteed non-null.
 function OscilloscopeCanvasInner({
                                    workerRef,
                                    streamToken,
@@ -18,8 +17,10 @@ function OscilloscopeCanvasInner({
   const {
     xStart, xShow, yPeakToPeak,
     verticalOffset, channelVisible,
+    frameSize, decimationRate, displayFrequency,
   } = useSettingsStore();
 
+  // Boot the OffscreenCanvas worker once
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ref = canvasRef as any;
@@ -42,21 +43,38 @@ function OscilloscopeCanvasInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Forward viewport + channel settings whenever they change
   useEffect(() => {
     workerRef.current?.postMessage({
-      type: 'settings', xStart, xShow, yPeakToPeak,
+      type: 'settings',
+      xStart, xShow, yPeakToPeak,
       verticalOffset, channelVisible,
     });
   }, [xStart, xShow, yPeakToPeak, verticalOffset, channelVisible, workerRef]);
 
+  // Forward display pipeline settings so the worker knows the effective frame
+  // geometry — useful for rendering time-axis labels and decimation indicators
+  useEffect(() => {
+    workerRef.current?.postMessage({
+      type: 'displaySettings',
+      frameSize,
+      decimationRate,
+      displayFrequency,
+    });
+  }, [frameSize, decimationRate, displayFrequency, workerRef]);
+
+  // Keep canvas pixel size in sync
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ref = canvasRef as any;
     if (!ref.current) return;
     const ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      workerRef.current?.postMessage({ type: 'resize',
-        width: Math.round(width), height: Math.round(height) });
+      workerRef.current?.postMessage({
+        type: 'resize',
+        width:  Math.round(width),
+        height: Math.round(height),
+      });
     });
     ro.observe(ref.current);
     return () => ro.disconnect();
@@ -72,7 +90,6 @@ function OscilloscopeCanvasInner({
   );
 }
 
-// Outer shell — delays mount until token is ready.
 export function OscilloscopeCanvas({ workerRef }: Props) {
   const streamToken = useAuthStore(s => s.streamToken);
   if (!streamToken) return null;

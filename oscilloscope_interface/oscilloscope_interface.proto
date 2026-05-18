@@ -34,55 +34,81 @@ enum Interpolation {
   INTERPOLATION_STEP        = 3;
 }
 
+enum DaqMode {
+  DAQ_MODE_UNSPECIFIED = 0;
+  DAQ_MODE_1           = 1;
+  DAQ_MODE_2           = 2;
+}
+
 // ─── Settings model ───────────────────────────────────────────────────────────
 
-// Trigger configuration (all fields optional in a delta update).
 message TriggerConfig {
   TriggerMode  mode    = 1;
   TriggerEdge  edge    = 2;
-  float        level_v = 3;   // volts
-  uint32       channel = 4;   // 0-based channel index
+  float        level_v = 3;
+  uint32       channel = 4;
 }
 
-// Per-channel configuration. Repeated field index == channel index.
 message ChannelConfig {
   bool  enabled         = 1;
   float volts_per_div   = 2;
   float vertical_offset = 3;
 }
 
-// Top-level settings bag sent to/from the server.
+// Top-level settings exchanged via GetSettings / SetSettings RPCs.
 message OscilloscopeSettings {
-  // Acquisition
-  uint32        sample_rate_hz      = 1;
-  uint32        frame_size_samples  = 2;
-  uint32        target_fps          = 3;
-  uint32        max_bandwidth_mbps  = 4;   // 0 = unlimited
-  Interpolation interpolation       = 5;
-  bool          persistence_enabled = 6;
-  float         persistence_decay   = 7;   // 0.0–1.0
+  // ── Emulation / acquisition pipeline ─────────────────────────────────────
+  uint64 sample_rate_hz       = 1;
+  uint32 frame_size_samples   = 2;
+  uint32 frame_frequency_hz   = 3;
+  uint32 display_frequency_hz = 4;
+  uint32 decimation_rate      = 5;
 
-  // Trigger
-  TriggerConfig trigger = 8;
+  // ── Spectrogram pipeline ──────────────────────────────────────────────────
+  uint32 spectrogram_fft_size = 6;
+  uint32 spectrogram_fps      = 7;
 
-  // Channels (index == channel number)
-  repeated ChannelConfig channels = 9;
+  // ── Rendering ─────────────────────────────────────────────────────────────
+  Interpolation interpolation       = 8;
+  bool          persistence_enabled = 9;
+  float         persistence_decay   = 10;
 
-  // Display
-  bool natural_units = 10;
-  // 0 = dark | 1 = amber | 2 = green  (small enum kept inline for brevity)
-  uint32 display_theme  = 11;
-  float  grid_opacity   = 12;   // 0.0–1.0
+  // ── Trigger ───────────────────────────────────────────────────────────────
+  TriggerConfig trigger = 11;
+
+  // ── Channels ──────────────────────────────────────────────────────────────
+  repeated ChannelConfig channels = 12;
+
+  // ── Display ───────────────────────────────────────────────────────────────
+  bool   natural_units  = 13;
+  uint32 display_theme  = 14;
+  float  grid_opacity   = 15;
+
+  // ── Synchronisation / DAQ ─────────────────────────────────────────────────
+  DaqMode daq_mode          = 16;
+  uint32  pre_delay_samples = 17;   // samples before trigger event
+
+  // ── Spectrogram device settings ───────────────────────────────────────────
+  float  spec_setting_one   = 18;
+  float  spec_setting_two   = 19;
+  float  spec_setting_three = 20;
+  uint32 spec_setting_four  = 21;   // splitter: 0 = opt_a, 1 = opt_b
+
+  // ── Archive ───────────────────────────────────────────────────────────────
+  bool   write_adc                  = 22;
+  string adc_archive_path           = 23;
+  bool   write_spectrogram          = 24;
+  string spectrogram_archive_path   = 25;
 }
 
 // ─── RPC messages ─────────────────────────────────────────────────────────────
 
 message StreamDataRequest {
-  DecimationTier requested_tier     = 1;
-  uint32         max_bandwidth_mbps = 2;
-  string         stream_token       = 3;
-  uint32         frame_size         = 4;
-  uint32         target_fps         = 5;
+  string         stream_token         = 1;
+  DecimationTier requested_tier       = 2;
+  uint32         frame_size           = 3;
+  uint32         display_frequency_hz = 4;
+  uint32         decimation_rate      = 5;
 }
 
 message DataChunk {
@@ -90,72 +116,71 @@ message DataChunk {
   uint64         sequence_number = 2;
   uint64         timestamp_ns    = 3;
   DecimationTier tier            = 4;
-  uint32         sample_rate_hz  = 5;
+  uint64         sample_rate_hz  = 5;
   uint32         channels        = 6;
+  uint32         frame_size      = 7;
+  uint32         decimation_rate = 8;
 }
 
 // ─── Spectrogram stream ───────────────────────────────────────────────────────
 
 message StreamSpectrogramRequest {
-  string spectrogram_token       = 1;   // same auth mechanism as StreamDataRequest
-  uint32 fft_size           = 2;   // 0 → server default (512)
-  uint32 target_fps         = 3;   // 0 → server default (10)
+  string spectrogram_token = 1;
+  uint32 fft_size          = 2;
+  uint32 target_fps        = 3;
 }
 
-// One spectrogram frame: magnitudes_db contains `channels * (fft_size/2 + 1)`
-// floats, interleaved by bin: BIN0_CH0, BIN0_CH1, BIN1_CH0, BIN1_CH1, ...
-// This mirrors the oscillogram's interleaved-by-sample convention.
 message SpectrogramChunk {
-  bytes  magnitudes_db    = 1;   // interleaved float32, dBFS
-  uint64 sequence_number  = 2;
-  uint64 timestamp_ns     = 3;
-  uint32 fft_size         = 4;   // = N; bins = N/2 + 1
-  float  freq_resolution_hz = 5; // sample_rate_hz / fft_size
-  uint32 sample_rate_hz   = 6;
-  uint32 channels         = 7;
+  bytes  magnitudes_db      = 1;
+  uint64 sequence_number    = 2;
+  uint64 timestamp_ns       = 3;
+  uint32 fft_size           = 4;
+  float  freq_resolution_hz = 5;
+  uint64 sample_rate_hz     = 6;
+  uint32 channels           = 7;
 }
 
-// GetSettings — no body, auth via bearer token in the Authorization header.
+// ─── Settings RPCs ────────────────────────────────────────────────────────────
+
 message GetSettingsRequest {}
 
 message GetSettingsResponse {
   OscilloscopeSettings settings = 1;
 }
 
-// SetSettings — only fields present in update_mask are applied.
-// The server returns the full settings state after the update.
 message SetSettingsRequest {
   google.protobuf.FieldMask update_mask = 1;
   OscilloscopeSettings      settings    = 2;
 }
 
 message SetSettingsResponse {
-  OscilloscopeSettings settings             = 1;
-  bool                 stream_restart_needed = 2;  // true if ADC pipeline must restart
+  OscilloscopeSettings settings              = 1;
+  bool                 stream_restart_needed = 2;
+}
+
+// ─── Directory browser RPC ────────────────────────────────────────────────────
+
+message BrowseDirectoryRequest {
+  string path = 1;   // absolute path to list; empty → "/"
+}
+
+message BrowseDirectoryEntry {
+  string name     = 1;
+  bool   is_dir   = 2;
+}
+
+message BrowseDirectoryResponse {
+  string                    current_path = 1;
+  string                    parent_path  = 2;   // empty when already at "/"
+  repeated BrowseDirectoryEntry entries  = 3;
 }
 
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 service OscilloscopeService {
-  // Data plane (authenticated via stream_token inside the request message)
-  rpc StreamData(StreamDataRequest) returns (stream DataChunk);
-  rpc StreamSpectrogram(StreamSpectrogramRequest) returns (stream SpectrogramChunk);
-
-  // Control plane (authenticated via Bearer JWT in Authorization header)
-  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
-  rpc SetSettings(SetSettingsRequest) returns (SetSettingsResponse);
-}
-
-// ─── ArchiveService ───────────────────────────────────────────────────────────
-
-message RequestDownloadRequest  { string file_path = 1; }
-message RequestDownloadResponse {
-  string download_url = 1;
-  string token        = 2;
-  uint32 ttl_seconds  = 3;
-  uint64 file_size    = 4;
-}
-
-service ArchiveService {
-  rpc RequestDownload(RequestDownloadRequest) returns (RequestDownloadResponse);
+  rpc StreamData        (StreamDataRequest)        returns (stream DataChunk);
+  rpc StreamSpectrogram (StreamSpectrogramRequest) returns (stream SpectrogramChunk);
+  rpc GetSettings       (GetSettingsRequest)       returns (GetSettingsResponse);
+  rpc SetSettings       (SetSettingsRequest)       returns (SetSettingsResponse);
+  rpc BrowseDirectory   (BrowseDirectoryRequest)   returns (BrowseDirectoryResponse);
 }

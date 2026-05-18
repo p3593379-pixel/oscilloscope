@@ -1,151 +1,497 @@
-// src/widgets/settings-curtain/SettingsCurtain.tsx
-import { useState, useEffect } from 'react';
-import { useSettingsStore, type TriggerMode, type TriggerEdge }
-    from '@/entities/oscilloscopeSettings/settingsStore';
-import { useOscilloscopeSettings } from '@/features/oscilloscope-settings/useOscilloscopeSettings';
-import { create } from '@bufbuild/protobuf';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { create }                       from '@bufbuild/protobuf';
 import {
     OscilloscopeSettingsSchema,
-    TriggerConfigSchema,
-    ChannelConfigSchema,
-    TriggerMode   as ProtoTriggerMode,
-    TriggerEdge   as ProtoTriggerEdge,
-    Interpolation as ProtoInterpolation,
-} from '@/generated/oscilloscope_interface_pb';
-import styles from './SettingsCurtain.module.css';
+    DaqMode as ProtoDaqMode,
+}                                       from '@/generated/oscilloscope_interface_pb';
+import { useSettingsStore }             from '@/entities/oscilloscopeSettings/settingsStore';
+import { useOscilloscopeSettings }      from '@/features/oscilloscope-settings/useOscilloscopeSettings';
+import type { DaqMode }                 from '@/entities/oscilloscopeSettings/settingsStore';
+import styles                           from './SettingsCurtain.module.css';
+
+const SAMPLES_PER_SECOND = 4000;
+
+function fmtHz(hz: number): string {
+    if (hz >= 1e9) return `${(hz / 1e9).toPrecision(4)} GHz`;
+    if (hz >= 1e6) return `${(hz / 1e6).toPrecision(4)} MHz`;
+    if (hz >= 1e3) return `${(hz / 1e3).toPrecision(4)} kHz`;
+    return `${hz} Hz`;
+}
+function fmtInt(n: number): string {
+    return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "'");
+}
+function parseDelimited(s: string): number {
+    return parseInt(s.replace(/'/g, ''), 10);
+}
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+const IconX = () => (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M2 2 L12 12 M12 2 L2 12"/>
+    </svg>
+);
+const IconUp = () => (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <path d="M6 10 L6 2 M2 6 L6 2 L10 6"/>
+    </svg>
+);
+const IconFolder = () => (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.4">
+        <path d="M1 3.5 L1 11 L12 11 L12 5 L6 5 L4.5 3.5 Z"/>
+    </svg>
+);
+const IconFile = () => (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.4">
+        <path d="M3 1 L8 1 L11 4 L11 12 L3 12 Z M8 1 L8 4 L11 4"/>
+    </svg>
+);
+const IconNav = () => (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.4">
+        <path d="M1 3.5 L1 11 L12 11 L12 5 L6 5 L4.5 3.5 Z"/>
+        <path d="M8 8 L10.5 8 M9.5 6.5 L11 8 L9.5 9.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+);
+const IconSpinner = () => (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"
+         style={{ animation: 'spin 0.7s linear infinite', display: 'block' }}>
+        <path d="M6 1 A5 5 0 0 1 11 6" strokeLinecap="round"/>
+    </svg>
+);
+const IconTick = () => (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 7 L5.5 10.5 L12 3.5"/>
+    </svg>
+);
+
+// ── Splitter ──────────────────────────────────────────────────────────────────
+
+interface SplitterProps {
+    options:  [string, string];
+    value:    0 | 1;
+    onChange: (v: 0 | 1) => void;
+}
+function Splitter({ options, value, onChange }: SplitterProps) {
+    return (
+        <div className={styles.segmented}>
+            <button
+                className={`${styles.seg} ${value === 0 ? styles.segActive : ''}`}
+                onClick={() => onChange(0)}
+            >{options[0]}</button>
+            <button
+                className={`${styles.seg} ${value === 1 ? styles.segActive : ''}`}
+                onClick={() => onChange(1)}
+            >{options[1]}</button>
+        </div>
+    );
+}
+
+// ── Spinbox ───────────────────────────────────────────────────────────────────
+
+interface SpinboxProps {
+    value:      number;
+    onChange:   (v: number) => void;
+    min?:       number;
+    max?:       number;
+    step?:      number;
+    unit?:      string;
+    delimited?: boolean;
+    width?:     number;
+}
+function Spinbox({ value, onChange, min, max, step = 1, unit, delimited, width = 100 }: SpinboxProps) {
+    const [raw, setRaw] = useState(delimited ? fmtInt(value) : String(value));
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        setRaw(delimited ? fmtInt(value) : String(value));
+    }, [value, delimited]);
+
+    const clamp = (n: number) => {
+        if (min !== undefined && n < min) return min;
+        if (max !== undefined && n > max) return max;
+        return n;
+    };
+    const commit = (s: string) => {
+        const n = delimited ? parseDelimited(s) : parseFloat(s);
+        if (isNaN(n)) { setRaw(delimited ? fmtInt(value) : String(value)); return; }
+        const next = clamp(n);
+        onChange(next);
+        setRaw(delimited ? fmtInt(next) : String(next));
+    };
+    const step_ = (dir: 1 | -1) => {
+        const next = clamp(value + dir * step);
+        onChange(next);
+        setRaw(delimited ? fmtInt(next) : String(next));
+        inputRef.current?.focus();
+    };
+
+    return (
+        <div className={styles.spinbox}>
+            <div className={styles.spinboxField}>
+                <input
+                    ref={inputRef}
+                    type="text"
+                    inputMode="numeric"
+                    className={styles.spinboxInput}
+                    style={{ width }}
+                    value={raw}
+                    onChange={e => setRaw(e.target.value)}
+                    onBlur={e  => commit(e.target.value)}
+                    onKeyDown={e => {
+                        if (e.key === 'Enter')     { commit((e.target as HTMLInputElement).value); }
+                        if (e.key === 'ArrowUp')   { e.preventDefault(); step_(1);  }
+                        if (e.key === 'ArrowDown') { e.preventDefault(); step_(-1); }
+                    }}
+                />
+                <div className={styles.spinboxArrows}>
+                    <button
+                        className={styles.spinboxArrow}
+                        onMouseDown={e => { e.preventDefault(); step_(1); }}
+                        tabIndex={-1}
+                        aria-label="Increment"
+                    >
+                        <svg width="7" height="5" viewBox="0 0 7 5" fill="currentColor">
+                            <path d="M3.5 0 L7 5 L0 5 Z"/>
+                        </svg>
+                    </button>
+                    <button
+                        className={styles.spinboxArrow}
+                        onMouseDown={e => { e.preventDefault(); step_(-1); }}
+                        tabIndex={-1}
+                        aria-label="Decrement"
+                    >
+                        <svg width="7" height="5" viewBox="0 0 7 5" fill="currentColor">
+                            <path d="M3.5 5 L7 0 L0 0 Z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            {unit && <span className={styles.unit}>{unit}</span>}
+        </div>
+    );
+}
+
+// ── DirPicker ─────────────────────────────────────────────────────────────────
+
+interface DirPickerProps {
+    initialPath: string;
+    onSelect:    (path: string) => void;
+    onClose:     () => void;
+    browse:      (path: string) => Promise<{
+        currentPath: string;
+        parentPath:  string;
+        entries:     { name: string; isDir: boolean }[];
+    }>;
+}
+
+function DirPicker({ initialPath, onSelect, onClose, browse }: DirPickerProps) {
+    const [currentPath, setCurrentPath] = useState(initialPath || '/');
+    const [entries,     setEntries]     = useState<{ name: string; isDir: boolean }[]>([]);
+    const [loading,     setLoading]     = useState(false);
+    const [error,       setError]       = useState<string | null>(null);
+    const [parentPath,  setParentPath]  = useState('');
+
+    // Each in-flight navigate call owns an abort ref cell passed by object so
+    // it can be synchronously cancelled before any await resolves.
+    // This is immune to Strict Mode's double-invocation because the abort cell
+    // is created fresh per navigate() call, not per component mount.
+    const navigate = useCallback(async (path: string) => {
+        const abort = { cancelled: false };
+
+        setLoading(true);
+        setError(null);
+
+        try {
+            const res = await browse(path);
+            if (abort.cancelled) return abort;
+            setCurrentPath(res.currentPath);
+            setParentPath(res.parentPath);
+            setEntries(res.entries.map(e => ({ name: e.name, isDir: e.isDir })));
+        } catch (e) {
+            if (abort.cancelled) return abort;
+            setError(e instanceof Error ? e.message : 'Browse failed');
+        } finally {
+            if (!abort.cancelled) setLoading(false);
+        }
+        return abort;
+    }, [browse]);
+
+    // Initial load. The useEffect cleanup receives the abort cell synchronously
+    // via the ref below — set before the first await, so Strict Mode's cleanup
+    // can always cancel the in-flight call before it touches state.
+    const abortRef = useRef<{ cancelled: boolean } | null>(null);
+
+    useEffect(() => {
+        // Strict Mode fires this twice. On the first run we kick off navigate()
+        // and store the abort cell in abortRef synchronously via the returned
+        // promise's microtask — but that's too late for the cleanup.
+        // Instead we store a "pending abort" stub synchronously, then navigate
+        // fills it in when it starts running.
+        const pendingAbort = { cancelled: false };
+        abortRef.current = pendingAbort;
+
+        navigate(initialPath || '/').then(abort => {
+            // Replace stub with the real abort cell from this navigate call
+            // so future cancellations target the right closure.
+            abortRef.current = abort ?? null;
+        });
+
+        return () => {
+            // Cancel whichever cell we have — stub or real.
+            // If the real abort cell hasn't arrived yet (still in microtask queue),
+            // the pending stub is already marked cancelled so navigate will
+            // check abort.cancelled === true on its very first line after await.
+            pendingAbort.cancelled = true;
+            if (abortRef.current) abortRef.current.cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    return (
+        <div className={styles.pickerBackdrop} onClick={onClose}>
+            <div className={styles.pickerModal} onClick={e => e.stopPropagation()}>
+                <div className={styles.pickerHeader}>
+                    <span className={styles.curtainTitle}>Choose Directory</span>
+                    <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+                        <IconX />
+                    </button>
+                </div>
+
+                <div className={styles.pickerPath}>
+                    {parentPath && (
+                        <button className={styles.pickerUpBtn} onClick={() => navigate(parentPath)}>
+                            <IconUp /> ..
+                        </button>
+                    )}
+                    <span className={styles.pickerCurrentPath}>{currentPath}</span>
+                </div>
+
+                {error && <div className={styles.errorBanner}>⚠ {error}</div>}
+
+                <div className={styles.pickerList}>
+                    {loading && <div className={styles.pickerLoading}>Loading…</div>}
+                    {!loading && entries.length === 0 && (
+                        <div className={styles.pickerEmpty}>Empty directory</div>
+                    )}
+                    {!loading && entries.map(e => (
+                        <button
+                            key={e.name}
+                            className={`${styles.pickerEntry} ${e.isDir ? styles.pickerEntryDir : styles.pickerEntryFile}`}
+                            onClick={() => {
+                                if (!e.isDir) return;
+                                const next = currentPath === '/'
+                                    ? `/${e.name}`
+                                    : `${currentPath}/${e.name}`;
+                                navigate(next);
+                            }}
+                            disabled={!e.isDir}
+                        >
+                            {e.isDir ? <IconFolder /> : <IconFile />}
+                            <span>{e.name}</span>
+                        </button>
+                    ))}
+                </div>
+
+                <div className={styles.pickerFooter}>
+                    <button className={styles.cancelBtn} onClick={onClose}>Cancel</button>
+                    <button
+                        className={styles.applyBtn}
+                        onClick={() => { onSelect(currentPath); onClose(); }}
+                    >
+                        Select
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ── Main curtain ──────────────────────────────────────────────────────────────
+
+type ApplyState = 'idle' | 'busy' | 'applied';
 
 interface Props {
-    open:           boolean;
-    onClose:        () => void;
+    open:    boolean;
+    onClose: () => void;
 }
 
 export function SettingsCurtain({ open, onClose }: Props) {
-    const store                              = useSettingsStore();
-    const { fetchSettings, pushSettings, loading, error } = useOscilloscopeSettings();
+    const { fetchSettings, pushSettings, browseDirectory } = useOscilloscopeSettings();
 
-    // ── Draft state ───────────────────────────────────────────────────────────
-    const [triggerMode,    setTriggerMode]    = useState(store.triggerMode);
-    const [triggerEdge,    setTriggerEdge]    = useState(store.triggerEdge);
-    const [triggerLevel,   setTriggerLevel]   = useState(store.triggerLevel);
-    const [triggerChannel, setTriggerChannel] = useState(store.triggerChannel);
-    const [targetFps,      setTargetFps]      = useState(store.targetFps);
-    const [maxBandwidth,   setMaxBandwidth]   = useState(store.maxBandwidthMbps);
-    const [naturalUnits,   setNaturalUnits]   = useState(store.naturalUnits);
-    const [ch0Visible,     setCh0Visible]     = useState(store.channelVisible[0]);
-    const [ch1Visible,     setCh1Visible]     = useState(store.channelVisible[1]);
-    const [ch0VPD,         setCh0VPD]         = useState(store.voltsPerDiv[0]);
-    const [ch1VPD,         setCh1VPD]         = useState(store.voltsPerDiv[1]);
-    const [ch0Offset,      setCh0Offset]      = useState(store.verticalOffset[0]);
-    const [ch1Offset,      setCh1Offset]      = useState(store.verticalOffset[1]);
-    const [interpolation,  setInterpolation]  = useState<'linear'|'sinc'|'step'>('sinc');
-    const [persistence,    setPersistence]    = useState(false);
-    const [persistDecay,   setPersistDecay]   = useState(0.85);
-    const [gridOpacity,    setGridOpacity]    = useState(0.35);
-    const [theme,          setTheme]          = useState<'dark'|'amber'|'green'>('dark');
+    // ── Transient UI state — resets on every open ─────────────────────────────
+    const [applyState, setApplyState] = useState<ApplyState>('idle');
+    const [error,      setError]      = useState<string | null>(null);
+    const appliedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // ── Draft settings ────────────────────────────────────────────────────────
+    const [daqMode,        setDaqMode]        = useState<DaqMode>('DAQ_MODE_1');
+    const [frameFrequency, setFrameFrequency] = useState(1000);
+    const [naturalUnits,   setNaturalUnits]   = useState(false);
+    const [frameSize,      setFrameSize]      = useState(2500);
+    const [preDelay,       setPreDelay]       = useState(0);
+    const [sampleRate,     setSampleRate]     = useState(2_500_000_000);
+    const [specOne,        setSpecOne]        = useState(0);
+    const [specTwo,        setSpecTwo]        = useState(0);
+    const [specThree,      setSpecThree]      = useState(0);
+    const [specFour,       setSpecFour]       = useState<0 | 1>(0);
+    const [writeAdc,       setWriteAdc]       = useState(false);
+    const [adcPath,        setAdcPath]        = useState('/opt/osc_archive/adc');
+    const [writeSpec,      setWriteSpec]      = useState(false);
+    const [specPath,       setSpecPath]       = useState('/opt/osc_archive/spectrogram');
+
+    // ── Dirty-tracking wrappers ───────────────────────────────────────────────
+    // Any user interaction resets a visible 'applied' tick back to 'idle'.
+    const markDirty = useCallback(() => {
+        setApplyState(s => {
+            if (s === 'applied') {
+                if (appliedTimerRef.current) {
+                    clearTimeout(appliedTimerRef.current);
+                    appliedTimerRef.current = null;
+                }
+                return 'idle';
+            }
+            return s;
+        });
+    }, []);
+
+    const setDaqModeD        = (v: DaqMode)  => { markDirty(); setDaqMode(v);        };
+    const setFrameFreqD      = (v: number)   => { markDirty(); setFrameFrequency(v); };
+    const setNaturalUnitsD   = (v: boolean)  => { markDirty(); setNaturalUnits(v);   };
+    const setFrameSizeD      = (v: number)   => { markDirty(); setFrameSize(v);      };
+    const setPreDelayD       = (v: number)   => { markDirty(); setPreDelay(v);       };
+    const setSampleRateD     = (v: number)   => { markDirty(); setSampleRate(v);     };
+    const setSpecOneD        = (v: number)   => { markDirty(); setSpecOne(v);        };
+    const setSpecTwoD        = (v: number)   => { markDirty(); setSpecTwo(v);        };
+    const setSpecThreeD      = (v: number)   => { markDirty(); setSpecThree(v);      };
+    const setSpecFourD       = (v: 0 | 1)    => { markDirty(); setSpecFour(v);       };
+    const setWriteAdcD       = (v: boolean)  => { markDirty(); setWriteAdc(v);       };
+    const setAdcPathD        = (v: string)   => { markDirty(); setAdcPath(v);        };
+    const setWriteSpecD      = (v: boolean)  => { markDirty(); setWriteSpec(v);      };
+    const setSpecPathD       = (v: string)   => { markDirty(); setSpecPath(v);       };
+
+    // ── Directory picker state ────────────────────────────────────────────────
+    const [pickerOpen,   setPickerOpen]   = useState(false);
+    const [pickerTarget, setPickerTarget] = useState<'adc' | 'spec'>('adc');
+
+    // ── Snapshot store → draft ────────────────────────────────────────────────
+    const snapshotDraft = useCallback(() => {
+        const s = useSettingsStore.getState();
+        setDaqMode(s.daqMode);
+        setFrameFrequency(s.frameFrequency);
+        setNaturalUnits(s.naturalUnits);
+        setFrameSize(s.frameSize);
+        setPreDelay(s.preDelaySamples);
+        setSampleRate(s.sampleRate);
+        setSpecOne(s.specSettingOne);
+        setSpecTwo(s.specSettingTwo);
+        setSpecThree(s.specSettingThree);
+        setSpecFour(s.specSettingFour as 0 | 1);
+        setWriteAdc(s.writeAdc);
+        setAdcPath(s.adcArchivePath);
+        setWriteSpec(s.writeSpectrogram);
+        setSpecPath(s.spectrogramArchivePath);
+    }, []);
+
+    // On open: reset transient state, snapshot store, fetch from server,
+    // then snapshot again so draft reflects whatever the server returned.
     useEffect(() => {
         if (!open) return;
-
-        // Sync draft from store + fetch fresh from server
-        setTriggerMode(store.triggerMode);
-        setTriggerEdge(store.triggerEdge);
-        setTriggerLevel(store.triggerLevel);
-        setTriggerChannel(store.triggerChannel);
-        setTargetFps(store.targetFps);
-        setMaxBandwidth(store.maxBandwidthMbps);
-        setNaturalUnits(store.naturalUnits);
-        setCh0Visible(store.channelVisible[0]);
-        setCh1Visible(store.channelVisible[1]);
-        setCh0VPD(store.voltsPerDiv[0]);
-        setCh1VPD(store.voltsPerDiv[1]);
-        setCh0Offset(store.verticalOffset[0]);
-        setCh1Offset(store.verticalOffset[1]);
-        fetchSettings();  // ← GET /GetSettings, result flows into store, next open will re-sync
+        setApplyState('idle');
+        setError(null);
+        if (appliedTimerRef.current) {
+            clearTimeout(appliedTimerRef.current);
+            appliedTimerRef.current = null;
+        }
+        snapshotDraft();
+        fetchSettings()
+            .then(() => snapshotDraft())
+            .catch(e => setError(e instanceof Error ? e.message : 'Failed to load settings'));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
     // Escape key
     useEffect(() => {
         if (!open) return;
-        const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        const h = (e: KeyboardEvent) => { if (e.key === 'Escape' && !pickerOpen) onClose(); };
         window.addEventListener('keydown', h);
         return () => window.removeEventListener('keydown', h);
-    }, [open, onClose]);
+    }, [open, onClose, pickerOpen]);
+
+    // Cleanup timer on unmount
+    useEffect(() => () => {
+        if (appliedTimerRef.current) clearTimeout(appliedTimerRef.current);
+    }, []);
+
+    // ── Derived display values ────────────────────────────────────────────────
+    const frameSizeDisplay = naturalUnits ? frameSize  / SAMPLES_PER_SECOND : frameSize;
+    const preDelayDisplay  = naturalUnits ? preDelay   / SAMPLES_PER_SECOND : preDelay;
+    const frameSizeUnit    = naturalUnits ? 's'        : 'samples';
+    const preDelayUnit     = naturalUnits ? 's'        : 'samples';
 
     // ── Apply ─────────────────────────────────────────────────────────────────
     const apply = async () => {
-        const triggerModeMap: Record<TriggerMode, ProtoTriggerMode> = {
-            AUTO:   ProtoTriggerMode.AUTO,
-            NORMAL: ProtoTriggerMode.NORMAL,
-            SINGLE: ProtoTriggerMode.SINGLE,
-        };
-        const triggerEdgeMap: Record<TriggerEdge, ProtoTriggerEdge> = {
-            RISING:  ProtoTriggerEdge.RISING,
-            FALLING: ProtoTriggerEdge.FALLING,
-        };
-        const interpolationMap: Record<string, ProtoInterpolation> = {
-            linear: ProtoInterpolation.LINEAR,
-            sinc:   ProtoInterpolation.SINC,
-            step:   ProtoInterpolation.STEP,
-        };
+        setApplyState('busy');
+        setError(null);
+        try {
+            const daqModeProto = daqMode === 'DAQ_MODE_1'
+                ? ProtoDaqMode.DAQ_MODE_1
+                : ProtoDaqMode.DAQ_MODE_2;
 
-        const patch = create(OscilloscopeSettingsSchema, {
-            targetFps:         targetFps,
-            maxBandwidthMbps:  maxBandwidth,
-            naturalUnits:      naturalUnits,
-            gridOpacity:       gridOpacity,
-            persistenceEnabled: persistence,
-            persistenceDecay:  persistDecay,
-            displayTheme:      theme === 'dark' ? 0 : theme === 'amber' ? 1 : 2,
-            interpolation:     interpolationMap[interpolation],
-            trigger: create(TriggerConfigSchema, {
-                mode:    triggerModeMap[triggerMode],
-                edge:    triggerEdgeMap[triggerEdge],
-                levelV:  triggerLevel,
-                channel: triggerChannel,
-            }),
-            channels: [
-                create(ChannelConfigSchema, { enabled: ch0Visible, voltsPerDiv: ch0VPD, verticalOffset: ch0Offset }),
-                create(ChannelConfigSchema, { enabled: ch1Visible, voltsPerDiv: ch1VPD, verticalOffset: ch1Offset }),
-            ],
-        });
+            const patch = create(OscilloscopeSettingsSchema, {
+                frameFrequencyHz:       frameFrequency,
+                sampleRateHz:           BigInt(sampleRate),
+                frameSizeSamples:       frameSize,
+                naturalUnits:           naturalUnits,
+                preDelaySamples:        preDelay,
+                daqMode:                daqModeProto,
+                specSettingOne:         specOne,
+                specSettingTwo:         specTwo,
+                specSettingThree:       specThree,
+                specSettingFour:        specFour,
+                writeAdc:               writeAdc,
+                adcArchivePath:         adcPath,
+                writeSpectrogram:       writeSpec,
+                spectrogramArchivePath: specPath,
+            });
 
-        // Build field mask paths for every field we're sending
-        const paths = [
-            'target_fps', 'max_bandwidth_mbps', 'natural_units',
-            'grid_opacity', 'persistence_enabled', 'persistence_decay',
-            'display_theme', 'interpolation',
-            'trigger.mode', 'trigger.edge', 'trigger.level_v', 'trigger.channel',
-            'channels',
-        ];
+            const paths = [
+                'frame_frequency_hz', 'sample_rate_hz', 'frame_size_samples',
+                'natural_units', 'pre_delay_samples', 'daq_mode',
+                'spec_setting_one', 'spec_setting_two', 'spec_setting_three',
+                'spec_setting_four', 'write_adc', 'adc_archive_path',
+                'write_spectrogram', 'spectrogram_archive_path',
+            ];
 
-        const restartNeeded = await pushSettings(patch, paths);
-        if (restartNeeded) {
-            // Signal the data stream to re-negotiate (dispatch a custom event;
-            // useDataStream can listen for it and restart the stream)
-            window.dispatchEvent(new CustomEvent('osc:streamRestartNeeded'));
+            const restartNeeded = await pushSettings(patch, paths);
+            if (restartNeeded)
+                window.dispatchEvent(new CustomEvent('osc:streamRestartNeeded'));
+
+            setApplyState('applied');
+            appliedTimerRef.current = setTimeout(() => {
+                setApplyState('idle');
+                appliedTimerRef.current = null;
+            }, 1500);
+
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Failed to apply settings');
+            setApplyState('idle');
         }
-
-        // Commit draft to local store
-        store.setTriggerMode(triggerMode);
-        store.setTriggerEdge(triggerEdge);
-        store.setTriggerLevel(triggerLevel);
-        store.setTriggerChannel(triggerChannel);
-        store.setTargetFps(targetFps);
-        store.setMaxBandwidth(maxBandwidth);
-        store.setNaturalUnits(naturalUnits);
-        store.setChannelVisible(0, ch0Visible);
-        store.setChannelVisible(1, ch1Visible);
-        store.setVoltsPerDiv(0, ch0VPD);
-        store.setVoltsPerDiv(1, ch1VPD);
-        store.setVerticalOffset(0, ch0Offset);
-        store.setVerticalOffset(1, ch1Offset);
-        onClose();
     };
 
+    // ── Dir picker helpers ────────────────────────────────────────────────────
+    const openPicker = (target: 'adc' | 'spec') => {
+        setPickerTarget(target);
+        setPickerOpen(true);
+    };
+    const handlePickerSelect = (path: string) => {
+        if (pickerTarget === 'adc') setAdcPathD(path);
+        else                        setSpecPathD(path);
+    };
+
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
         <>
-            {/* Backdrop */}
             <div
                 className={`${styles.backdrop} ${open ? styles.backdropVisible : ''}`}
                 onClick={onClose}
@@ -156,265 +502,227 @@ export function SettingsCurtain({ open, onClose }: Props) {
                 className={`${styles.curtain} ${open ? styles.curtainOpen : ''}`}
                 role="dialog"
                 aria-modal="true"
-                aria-label="Acquisition settings"
+                aria-label="Device settings"
             >
-                {/* Header */}
                 <div className={styles.curtainHeader}>
-                    <span className={styles.curtainTitle}>Acquisition Settings</span>
-                    <button className={styles.closeBtn} onClick={onClose} aria-label="Close settings">
+                    <span className={styles.curtainTitle}>Device Settings</span>
+                    <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
                         <IconX />
                     </button>
                 </div>
 
-                {/* Error banner */}
-                {error && (
-                    <div className={styles.errorBanner}>⚠ {error}</div>
-                )}
+                {error && <div className={styles.errorBanner}>⚠ {error}</div>}
 
-                {/* Body grid */}
                 <div className={styles.body}>
 
-                    {/* ══ Trigger ══ */}
+                    {/* ══ Synchronisation Settings ════════════════════════ */}
                     <section className={styles.section}>
-                        <h3 className={styles.sectionTitle}>Trigger</h3>
+                        <h3 className={styles.sectionTitle}>Synchronisation Settings</h3>
 
                         <div className={styles.field}>
-                            <label className={styles.label}>Mode</label>
-                            <div className={styles.segmented}>
-                                {(['AUTO', 'NORMAL', 'SINGLE'] as TriggerMode[]).map(m => (
-                                    <button key={m}
-                                            className={`${styles.seg} ${triggerMode === m ? styles.segActive : ''}`}
-                                            onClick={() => setTriggerMode(m)}>{m}</button>
-                                ))}
-                            </div>
+                            <label className={styles.label}>DAQ Mode</label>
+                            <Splitter
+                                options={['daq_mode_1', 'daq_mode_2']}
+                                value={daqMode === 'DAQ_MODE_1' ? 0 : 1}
+                                onChange={v => setDaqModeD(v === 0 ? 'DAQ_MODE_1' : 'DAQ_MODE_2')}
+                            />
                         </div>
 
                         <div className={styles.field}>
-                            <label className={styles.label}>Edge</label>
-                            <div className={styles.segmented}>
+                            <label className={styles.label}>Frame Frequency</label>
+                            <Spinbox
+                                value={frameFrequency}
+                                onChange={setFrameFreqD}
+                                min={1} max={10000} step={1}
+                                unit="Hz"
+                                delimited
+                            />
+                            <span className={styles.hint}>
+                                Rate at which the ADC stream is chopped into frames
+                            </span>
+                        </div>
+                    </section>
+
+                    {/* ══ Frame Settings ══════════════════════════════════ */}
+                    <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Frame Settings</h3>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>Units</label>
+                            <Splitter
+                                options={['natural', 'samples']}
+                                value={naturalUnits ? 0 : 1}
+                                onChange={v => setNaturalUnitsD(v === 0)}
+                            />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>Frame Size</label>
+                            <Spinbox
+                                value={frameSizeDisplay}
+                                onChange={v => setFrameSizeD(
+                                    naturalUnits ? Math.round(v * SAMPLES_PER_SECOND) : Math.round(v)
+                                )}
+                                min={0}
+                                step={naturalUnits ? 0.001 : 1}
+                                unit={frameSizeUnit}
+                                delimited={!naturalUnits}
+                            />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>Pre-delay</label>
+                            <Spinbox
+                                value={preDelayDisplay}
+                                onChange={v => setPreDelayD(
+                                    naturalUnits ? Math.round(v * SAMPLES_PER_SECOND) : Math.round(v)
+                                )}
+                                min={0}
+                                step={naturalUnits ? 0.001 : 1}
+                                unit={preDelayUnit}
+                                delimited={!naturalUnits}
+                            />
+                        </div>
+                    </section>
+
+                    {/* ══ ADC Settings ════════════════════════════════════ */}
+                    <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>ADC Settings</h3>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>
+                                ADC Sample Rate
+                                <span className={styles.labelVal}>{fmtHz(sampleRate)}</span>
+                            </label>
+                            <Spinbox
+                                value={sampleRate}
+                                onChange={setSampleRateD}
+                                min={1_000_000} max={5_000_000_000} step={250_000_000}
+                                unit="Hz"
+                                delimited
+                                width={150}
+                            />
+                        </div>
+                    </section>
+
+                    {/* ══ Spectrogram Settings ════════════════════════════ */}
+                    <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Spectrogram Settings</h3>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>spec_setting_one</label>
+                            <Spinbox value={specOne}   onChange={setSpecOneD}   step={0.1} unit="m" />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>spec_setting_two</label>
+                            <Spinbox value={specTwo}   onChange={setSpecTwoD}   step={0.1} />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>spec_setting_three</label>
+                            <Spinbox value={specThree} onChange={setSpecThreeD} step={0.1} />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>spec_setting_four</label>
+                            <Splitter
+                                options={['opt_a', 'opt_b']}
+                                value={specFour}
+                                onChange={setSpecFourD}
+                            />
+                        </div>
+                    </section>
+
+                    {/* ══ Archive Settings ════════════════════════════════ */}
+                    <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Archive Settings</h3>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>Write ADC</label>
+                            <Splitter
+                                options={['Yes', 'No']}
+                                value={writeAdc ? 0 : 1}
+                                onChange={v => setWriteAdcD(v === 0)}
+                            />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>ADC Archive Location</label>
+                            <div className={styles.pathRow}>
+                                <input
+                                    type="text"
+                                    className={styles.pathInput}
+                                    value={adcPath}
+                                    onChange={e => setAdcPathD(e.target.value)}
+                                    spellCheck={false}
+                                />
                                 <button
-                                    className={`${styles.seg} ${triggerEdge === 'RISING' ? styles.segActive : ''}`}
-                                    onClick={() => setTriggerEdge('RISING')}
-                                ><IconRising /> Rising</button>
+                                    className={styles.navBtn}
+                                    onClick={() => openPicker('adc')}
+                                    aria-label="Browse ADC archive directory"
+                                >
+                                    <IconNav />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>Write Spectrogram</label>
+                            <Splitter
+                                options={['Yes', 'No']}
+                                value={writeSpec ? 0 : 1}
+                                onChange={v => setWriteSpecD(v === 0)}
+                            />
+                        </div>
+
+                        <div className={styles.field}>
+                            <label className={styles.label}>Spectrogram Archive Location</label>
+                            <div className={styles.pathRow}>
+                                <input
+                                    type="text"
+                                    className={styles.pathInput}
+                                    value={specPath}
+                                    onChange={e => setSpecPathD(e.target.value)}
+                                    spellCheck={false}
+                                />
                                 <button
-                                    className={`${styles.seg} ${triggerEdge === 'FALLING' ? styles.segActive : ''}`}
-                                    onClick={() => setTriggerEdge('FALLING')}
-                                ><IconFalling /> Falling</button>
+                                    className={styles.navBtn}
+                                    onClick={() => openPicker('spec')}
+                                    aria-label="Browse spectrogram archive directory"
+                                >
+                                    <IconNav />
+                                </button>
                             </div>
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>
-                                Level <span className={styles.labelVal}>{triggerLevel.toFixed(3)} V</span>
-                            </label>
-                            <input type="range" min="-5" max="5" step="0.001"
-                                   value={triggerLevel}
-                                   onChange={e => setTriggerLevel(parseFloat(e.target.value))}
-                                   className={styles.slider} />
-                            <div className={styles.sliderTicks}><span>−5 V</span><span>0</span><span>+5 V</span></div>
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>Source</label>
-                            <div className={styles.radioPills}>
-                                {[0, 1].map(ch => (
-                                    <label key={ch}
-                                           className={`${styles.radioPill} ${triggerChannel === ch ? styles.radioPillActive : ''}`}>
-                                        <input type="radio" name="trigCh" value={ch}
-                                               checked={triggerChannel === ch}
-                                               onChange={() => setTriggerChannel(ch)}
-                                               className={styles.srOnly} />
-                                        CH {ch + 1}
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
-                    </section>
-
-                    {/* ══ Channels ══ */}
-                    <section className={styles.section}>
-                        <h3 className={styles.sectionTitle}>Channels</h3>
-                        {([
-                            { label: 'CH 1', color: '#1565c0', visible: ch0Visible, setVisible: setCh0Visible,
-                                vpd: ch0VPD, setVpd: setCh0VPD, offset: ch0Offset, setOffset: setCh0Offset },
-                            { label: 'CH 2', color: '#c62828', visible: ch1Visible, setVisible: setCh1Visible,
-                                vpd: ch1VPD, setVpd: setCh1VPD, offset: ch1Offset, setOffset: setCh1Offset },
-                        ]).map(ch => (
-                            <div key={ch.label} className={styles.channelRow}>
-                                <div className={styles.channelLabel}>
-                                    <span className={styles.chDot} style={{ background: ch.color }} />
-                                    {ch.label}
-                                    <label className={styles.toggle}>
-                                        <input type="checkbox" checked={ch.visible}
-                                               onChange={e => ch.setVisible(e.target.checked)} />
-                                        <span className={styles.toggleTrack}><span className={styles.toggleThumb} /></span>
-                                    </label>
-                                </div>
-                                <div className={styles.channelControls}>
-                                    <div className={styles.inlineField}>
-                                        <span className={styles.inlineLabel}>V/div</span>
-                                        <select className={styles.select} value={ch.vpd}
-                                                onChange={e => ch.setVpd(parseFloat(e.target.value))}>
-                                            {[0.05, 0.1, 0.2, 0.5, 1, 2, 5].map(v =>
-                                                <option key={v} value={v}>{v} V</option>)}
-                                        </select>
-                                    </div>
-                                    <div className={styles.inlineField}>
-                                        <span className={styles.inlineLabel}>Offset</span>
-                                        <input type="number" className={styles.numInput} step="0.01"
-                                               value={ch.offset}
-                                               onChange={e => ch.setOffset(parseFloat(e.target.value))} />
-                                        <span className={styles.unit}>V</span>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </section>
-
-                    {/* ══ Acquisition ══ */}
-                    <section className={styles.section}>
-                        <h3 className={styles.sectionTitle}>Acquisition</h3>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>Interpolation</label>
-                            <div className={styles.segmented}>
-                                {(['linear', 'sinc', 'step'] as const).map(m => (
-                                    <button key={m}
-                                            className={`${styles.seg} ${interpolation === m ? styles.segActive : ''}`}
-                                            onClick={() => setInterpolation(m)}>{m}</button>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>
-                                Target FPS <span className={styles.labelVal}>{targetFps} fps</span>
-                            </label>
-                            <div className={styles.stepper}>
-                                <button className={styles.stepBtn}
-                                        onClick={() => setTargetFps(Math.max(1, targetFps - 5))}>−</button>
-                                <span className={styles.stepVal}>{targetFps}</span>
-                                <button className={styles.stepBtn}
-                                        onClick={() => setTargetFps(Math.min(120, targetFps + 5))}>+</button>
-                            </div>
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>
-                                Max bandwidth
-                                <span className={styles.labelVal}>
-                  {maxBandwidth === 0 ? '∞ unlimited' : `${maxBandwidth} Mbps`}
-                </span>
-                            </label>
-                            <input type="range" min="0" max="1000" step="10"
-                                   value={maxBandwidth}
-                                   onChange={e => setMaxBandwidth(parseInt(e.target.value))}
-                                   className={styles.slider} />
-                            <div className={styles.sliderTicks}><span>∞</span><span>500</span><span>1000 Mbps</span></div>
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>
-                                Waveform persistence
-                            </label>
-                            <label className={styles.toggle}>
-                                <input type="checkbox" checked={persistence}
-                                       onChange={e => setPersistence(e.target.checked)} />
-                                <span className={styles.toggleTrack}><span className={styles.toggleThumb} /></span>
-                            </label>
-                        </div>
-
-                        {persistence && (
-                            <div className={styles.field}>
-                                <label className={styles.label}>
-                                    Decay <span className={styles.labelVal}>{persistDecay.toFixed(2)}</span>
-                                </label>
-                                <input type="range" min="0.5" max="0.99" step="0.01"
-                                       value={persistDecay}
-                                       onChange={e => setPersistDecay(parseFloat(e.target.value))}
-                                       className={styles.slider} />
-                            </div>
-                        )}
-                    </section>
-
-                    {/* ══ Display ══ */}
-                    <section className={styles.section}>
-                        <h3 className={styles.sectionTitle}>Display</h3>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>Screen theme</label>
-                            <div className={styles.swatches}>
-                                {([
-                                    { key: 'dark',  bg: '#0d1117', ring: '#4f98a3' },
-                                    { key: 'amber', bg: '#1a0f00', ring: '#f59e0b' },
-                                    { key: 'green', bg: '#001a0f', ring: '#22c55e' },
-                                ] as const).map(t => (
-                                    <button key={t.key}
-                                            className={`${styles.swatch} ${theme === t.key ? styles.swatchActive : ''}`}
-                                            style={{ background: t.bg, '--swatch-ring': t.ring } as React.CSSProperties}
-                                            onClick={() => setTheme(t.key)}
-                                            title={t.key} />
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>
-                                Grid opacity <span className={styles.labelVal}>{Math.round(gridOpacity * 100)}%</span>
-                            </label>
-                            <input type="range" min="0" max="1" step="0.01"
-                                   value={gridOpacity}
-                                   onChange={e => setGridOpacity(parseFloat(e.target.value))}
-                                   className={styles.slider} />
-                        </div>
-
-                        <div className={styles.field}>
-                            <label className={styles.label}>Natural units (Hz/s)</label>
-                            <label className={styles.toggle}>
-                                <input type="checkbox" checked={naturalUnits}
-                                       onChange={e => setNaturalUnits(e.target.checked)} />
-                                <span className={styles.toggleTrack}><span className={styles.toggleThumb} /></span>
-                            </label>
                         </div>
                     </section>
 
                 </div>{/* /body */}
 
-                {/* Footer */}
                 <div className={styles.footer}>
-                    <button className={styles.cancelBtn} onClick={onClose}>Cancel</button>
-                    <button className={styles.applyBtn} onClick={apply} disabled={loading}>
-                        {loading ? <Spinner /> : 'Apply'}
+                    <button className={styles.cancelBtn} onClick={onClose}>
+                        Cancel
+                    </button>
+                    <button
+                        className={`${styles.applyBtn} ${applyState === 'applied' ? styles.applyBtnApplied : ''}`}
+                        onClick={apply}
+                        disabled={applyState === 'busy'}
+                    >
+                        {applyState === 'busy'    && <IconSpinner />}
+                        {applyState === 'applied' && <IconTick />}
+                        {applyState === 'idle'    && 'Apply'}
                     </button>
                 </div>
             </div>
+
+            {pickerOpen && (
+                <DirPicker
+                    initialPath={pickerTarget === 'adc' ? adcPath : specPath}
+                    onSelect={handlePickerSelect}
+                    onClose={() => setPickerOpen(false)}
+                    browse={browseDirectory}
+                />
+            )}
         </>
     );
 }
-
-// ── Inline icons ──────────────────────────────────────────────────────────────
-const IconX = () => (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-        <line x1="2" y1="2" x2="12" y2="12"/><line x1="12" y1="2" x2="2" y2="12"/>
-    </svg>
-);
-const IconRising = () => (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="1,9 4,9 4,3 8,3 8,9 11,9"/>
-    </svg>
-);
-const IconFalling = () => (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="1,3 4,3 4,9 8,9 8,3 11,3"/>
-    </svg>
-);
-const Spinner = () => (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-         style={{ animation: 'spin 0.7s linear infinite' }}>
-        <path d="M7 1.5 A5.5 5.5 0 1 1 1.5 7"/>
-    </svg>
-);

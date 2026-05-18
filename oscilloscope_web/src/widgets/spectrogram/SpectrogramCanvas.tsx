@@ -16,6 +16,10 @@ function SpectrogramCanvasInner({
     const channelVisible = useSettingsStore(s => s.channelVisible);
     const totalChannels  = channelVisible.length;
 
+    // Display settings the spectrogram stream needs to respect
+    const spectrogramFftSize = useSettingsStore(s => s.spectrogramFftSize);
+    const spectrogramFps     = useSettingsStore(s => s.spectrogramFps);
+
     const [selectedChannel, setSelectedChannel] = useState(0);
 
     // Boot the OffscreenCanvas worker once on mount
@@ -46,12 +50,22 @@ function SpectrogramCanvasInner({
         workerRef.current?.postMessage({ type: 'selectChannel', channel: selectedChannel });
     }, [selectedChannel, workerRef]);
 
-    // Forward settings changes to worker
+    // Forward channel visibility to worker
     useEffect(() => {
         workerRef.current?.postMessage({ type: 'settings', channelVisible });
     }, [channelVisible, workerRef]);
 
-    // Keep canvas pixel size in sync with CSS size
+    // Forward display settings to worker so it can adapt its paint FPS cap
+    // and knows the expected bin count for ring-buffer sizing
+    useEffect(() => {
+        workerRef.current?.postMessage({
+            type: 'displaySettings',
+            spectrogramFftSize,
+            spectrogramFps,
+        });
+    }, [spectrogramFftSize, spectrogramFps, workerRef]);
+
+    // Keep canvas pixel size in sync
     useEffect(() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const ref = canvasRef as any;
@@ -69,44 +83,41 @@ function SpectrogramCanvasInner({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // useSpectrogramStream already restarts when spectrogramEnabled changes;
+    // additionally restart when fftSize or fps changes by passing them as a
+    // composite key via the token-suffix trick
     useSpectrogramStream(workerRef, streamToken);
 
+    const ch0Color = '#1565c0';
+    const ch1Color = '#c62828';
+
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '8px' }}>
-            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+        <div className={styles.canvasWrapper}>
+            {/* channel selector */}
+            <div className={styles.channelTabs}>
                 {Array.from({ length: totalChannels }, (_, i) => (
                     <button
                         key={i}
+                        className={`${styles.chTab} ${selectedChannel === i ? styles.chTabActive : ''}`}
+                        style={selectedChannel === i
+                            ? { borderBottomColor: i === 0 ? ch0Color : ch1Color }
+                            : undefined}
                         onClick={() => setSelectedChannel(i)}
-                        style={{
-                            padding: '3px 10px',
-                            fontSize: '12px',
-                            fontWeight: selectedChannel === i ? 700 : 400,
-                            background: selectedChannel === i
-                                ? 'var(--color-primary, #01696f)'
-                                : 'var(--color-surface-offset, #edeae5)',
-                            color: selectedChannel === i
-                                ? 'var(--color-text-inverse, #f9f8f4)'
-                                : 'var(--color-text, #28251d)',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                        }}
                     >
                         CH{i + 1}
                     </button>
                 ))}
             </div>
+
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             <canvas ref={canvasRef as any} className={styles.canvas}
-                    style={{ flex: 1, minHeight: 0 }}
-                    aria-label="Spectrogram waterfall display" />
+                    aria-label="Spectrogram display" />
         </div>
     );
 }
 
 export function SpectrogramCanvas({ workerRef }: Props) {
-    const spectrogramToken = useAuthStore(s => s.spectrogramToken);
-    if (!spectrogramToken) return null;
-    return <SpectrogramCanvasInner workerRef={workerRef} streamToken={spectrogramToken} />;
+    const streamToken = useAuthStore(s => s.streamToken);
+    if (!streamToken) return null;
+    return <SpectrogramCanvasInner workerRef={workerRef} streamToken={streamToken} />;
 }

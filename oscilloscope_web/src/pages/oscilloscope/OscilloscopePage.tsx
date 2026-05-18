@@ -6,7 +6,8 @@ import { useSettingsStore }      from '@/entities/oscilloscopeSettings/settingsS
 import { SessionMode, UserRole } from '@/generated/buf_connect_server_pb';
 import { OscWidget }             from '@/widgets/oscilloscope/OscWidget';
 import { SpectrogramWidget } from '@/widgets/spectrogram/SpectrogramWidget';
-import { useState }      from 'react';
+import { useState, useEffect } from 'react';
+import { useOscilloscopeSettings }     from '@/features/oscilloscope-settings/useOscilloscopeSettings';
 import { SettingsCurtain }       from '@/widgets/settings-curtain/SettingsCurtain';
 import {DockWidget, DockWidgetArea, Spinner} from '@/shared/ui';
 import styles                    from './OscilloscopePage.module.css';
@@ -223,6 +224,8 @@ function Menubar({ onSettingsClick }: MenubarProps) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 export function OscilloscopePage() {
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const { fetchSettings } = useOscilloscopeSettings();
+    useEffect(() => { fetchSettings(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
     const spectrogramToken = useAuthStore(s => s.spectrogramToken);
     if (!spectrogramToken) return <Spinner />;
 

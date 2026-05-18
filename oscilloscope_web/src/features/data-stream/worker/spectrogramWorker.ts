@@ -18,11 +18,16 @@ let writeRows: number[] = [];
 let dbMin:          number    = -120;
 let dbMax:          number    = 0;
 
-const TARGET_FPS     = 30;
-const FRAME_INTERVAL = 1000 / TARGET_FPS;
+// const TARGET_FPS     = 30;
+// const FRAME_INTERVAL = 1000 / TARGET_FPS;
 let lastFrameTime    = 0;
 let rafHandle        = 0;
 let dirty            = false;
+
+// Display settings forwarded from SpectrogramCanvas
+let workerFftSize:  number = 512;
+let workerFps:      number = 30;
+
 
 function colormapRgba(t: number): [number, number, number] {
     const stops: [number, [number, number, number]][] = [
@@ -51,7 +56,7 @@ function colormapRgba(t: number): [number, number, number] {
 function paint(now: number) {
     rafHandle = requestAnimationFrame(paint);
     if (!dirty) return;
-    if (now - lastFrameTime < FRAME_INTERVAL) return;
+    if (now - lastFrameTime < 1000 / Math.max(1, workerFps)) return;
     lastFrameTime = now;
     dirty = false;
 
@@ -110,6 +115,8 @@ self.onmessage = (e: MessageEvent) => {
         dbMin?:           number;
         dbMax?:           number;
         channelVisible?:  boolean[];
+        spectrogramFftSize?: number;
+        spectrogramFps?:     number;
     };
 
     switch (msg.type) {
@@ -192,6 +199,23 @@ self.onmessage = (e: MessageEvent) => {
         //     if (msg.channelVisible !== undefined) channelVisible = msg.channelVisible;
         //     break;
         // }
+
+
+        case 'displaySettings': {
+            if (msg.spectrogramFftSize !== undefined) {
+                workerFftSize = msg.spectrogramFftSize;
+                // Reinitialise waterfalls when expected bin count changes
+                if (canvas && canvas.width > 0) initWaterfalls();
+            }
+            if (msg.spectrogramFps !== undefined) {
+                workerFps = msg.spectrogramFps;
+                // Clamp the render throttle to the stream FPS so we don't
+                // paint empty rows faster than data arrives
+            }
+            dirty = true;
+            console.log(workerFftSize);
+            break;
+        }
 
         case 'stop': {
             cancelAnimationFrame(rafHandle);

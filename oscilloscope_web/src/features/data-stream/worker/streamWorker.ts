@@ -31,6 +31,12 @@ const TARGET_FPS      = 30;
 const FRAME_INTERVAL  = 1000 / TARGET_FPS;
 let   lastFrameTime   = 0;
 
+
+// Display pipeline settings forwarded from OscilloscopeCanvas
+let workerFrameSize:        number = 2500;
+let workerDecimationRate:   number = 1;
+let workerDisplayFrequency: number = 30;
+let effectiveSamples:       number = 2500; // updated by displaySettings
 const H_DIVS = 10;
 const V_DIVS = 8;
 
@@ -70,6 +76,10 @@ function paint(now: number) {
   ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
 
+// effectiveSamples from displaySettings: workerFrameSize / workerDecimationRate
+  const xShowEffective = xShow > 0 ? Math.min(xShow, effectiveSamples * 8) : effectiveSamples;
+  void xShowEffective;
+  // used for future x-axis tick labelling
   const yScale = H / yPeakToPeak;
 
   for (let ch = 0; ch < channels.length; ch++) {
@@ -142,6 +152,17 @@ self.onmessage = (e: MessageEvent) => {
       if (msg.channelVisible !== undefined) channelVisible = msg.channelVisible;
       break;
     }
+    case 'displaySettings': {
+      const d = e.data as { frameSize?: number; decimationRate?: number; displayFrequency?: number };
+      if (d.frameSize        !== undefined) workerFrameSize        = d.frameSize;
+      if (d.decimationRate   !== undefined) workerDecimationRate   = d.decimationRate;
+      if (d.displayFrequency !== undefined) workerDisplayFrequency = d.displayFrequency;
+      // Recalculate the effective sample count label used in drawGrid
+      effectiveSamples = Math.ceil(workerFrameSize / Math.max(1, workerDecimationRate));
+      console.log(workerDisplayFrequency)
+      break;
+    }
+
     case 'stop': {
       cancelAnimationFrame(rafHandle);
       break;

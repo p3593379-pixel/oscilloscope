@@ -28,7 +28,7 @@ function deinterleave(raw: Uint8Array, numChannels: number): Float32Array[] {
 
 export function useDataStream(
     workerRef: RefObject<Worker | null>,
-    streamToken: string,             // caller guarantees non-null
+    streamToken: string,
 ) {
   const streamingEnabled = useSettingsStore(s => s.streamingEnabled);
 
@@ -38,8 +38,8 @@ export function useDataStream(
   useEffect(() => {
     if (!streamingEnabled) return;
 
-    const { xShow, targetFps } = useSettingsStore.getState();
-    const abort   = new AbortController();
+    const { displayFrequency, frameSize, decimationRate } = useSettingsStore.getState();
+    const abort    = new AbortController();
     const waveform = useWaveformStore.getState();
 
     const run = async () => {
@@ -50,11 +50,11 @@ export function useDataStream(
       try {
         for await (const chunk of client.streamData(
             {
-              requestedTier:    DecimationTier.FULL,
-              maxBandwidthMbps: 0,
+              requestedTier:      DecimationTier.FULL,
               streamToken,
-              frameSize:        xShow,
-              targetFps,
+              frameSize,
+              displayFrequencyHz: displayFrequency,
+              decimationRate,
             },
             { signal: abort.signal }
         )) {
@@ -65,7 +65,8 @@ export function useDataStream(
           const perChannel = deinterleave(raw, numChannels);
 
           waveform.addSamples(perChannel[0].length);
-          if (chunk.sampleRateHz)                        waveform.setSampleRate(chunk.sampleRateHz);
+          // sampleRateHz is bigint in the proto — convert to number for the store
+          if (chunk.sampleRateHz) waveform.setSampleRate(Number(chunk.sampleRateHz));
           if (numChannels !== waveform.channelCount) waveform.setChannelCount(numChannels);
 
           for (let ch = 0; ch < perChannel.length; ch++) {
@@ -74,8 +75,8 @@ export function useDataStream(
             const transferable = new Float32Array(buf);
             workerRefRef.current.current?.postMessage(
                 { type: 'samples', channel: ch,
-                  sampleRate: chunk.sampleRateHz,
-                  sequence: chunk.sequenceNumber,
+                  sampleRate:  Number(chunk.sampleRateHz),
+                  sequence:    chunk.sequenceNumber,
                   timestampNs: chunk.timestampNs,
                   data: transferable },
                 [transferable.buffer]
@@ -92,7 +93,7 @@ export function useDataStream(
     };
 
     run();
-    return () => abort.abort();
+    return () => { abort.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamingEnabled, streamToken]);
 }
